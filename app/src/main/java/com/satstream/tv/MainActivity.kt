@@ -35,8 +35,12 @@ class MainActivity : AppCompatActivity() {
         channelList = findViewById(R.id.channelList)
         val playerView = findViewById<PlayerView>(R.id.playerView)
 
-        val renderers = DefaultRenderersFactory(this).setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER).setEnableDecoderFallback(true)
-        val loadControl = DefaultLoadControl.Builder().setBufferDurationsMs(1500, 15000, 1000, 1500).build()
+        val renderers = DefaultRenderersFactory(this)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+            .setEnableDecoderFallback(true)
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(1500, 15000, 1000, 1500)
+            .build()
         player = ExoPlayer.Builder(this, renderers).setLoadControl(loadControl).build()
         playerView.player = player
 
@@ -49,19 +53,30 @@ class MainActivity : AppCompatActivity() {
             if (currentUrl.isNotEmpty()) openExternal(currentUrl, currentTitle)
         }
         channelList.setOnItemClickListener { _, _, pos, _ ->
-            currentTitle = streams[pos].first; currentUrl = streams[pos].second
+            currentTitle = streams[pos].first
+            currentUrl = streams[pos].second
             statusText.text = "Playing 4K/H.265: $currentTitle"
-            player?.setMediaItem(MediaItem.fromUri(currentUrl)); player?.prepare(); player?.play()
+            player?.setMediaItem(MediaItem.fromUri(currentUrl))
+            player?.prepare()
+            player?.play()
         }
         channelList.setOnItemLongClickListener { _, _, pos, _ ->
-            openExternal(streams[pos].second, streams[pos].first); true
+            openExternal(streams[pos].second, streams[pos].first)
+            true
         }
     }
 
     private fun openExternal(url: String, title: String) {
         player?.pause()
-        val intent = Intent(Intent.ACTION_VIEW).apply { setDataAndType(Uri.parse(url), "video/*"); putExtra("title", title) }
-        try { startActivity(Intent.createChooser(intent, "Open with VLC / MX Player")) } catch (e: Exception) { Toast.makeText(this, "Install VLC or MX Player", Toast.LENGTH_SHORT).show() }
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(Uri.parse(url), "video/*")
+            putExtra("title", title)
+        }
+        try {
+            startActivity(Intent.createChooser(intent, "Open with VLC / MX Player"))
+        } catch (e: Exception) {
+            Toast.makeText(this, "Install VLC or MX Player", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun scanNetwork() {
@@ -71,11 +86,18 @@ class MainActivity : AppCompatActivity() {
                 val socket = DatagramSocket().apply { soTimeout = 3500 }
                 val msg = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: ssdp:all\r\n\r\n".toByteArray()
                 socket.send(DatagramPacket(msg, msg.size, InetAddress.getByName("239.255.255.250"), 1900))
-                val resp = DatagramPacket(ByteArray(2048), 2048); socket.receive(resp)
+                val resp = DatagramPacket(ByteArray(2048), 2048)
+                socket.receive(resp)
                 val ip = resp.address.hostAddress ?: ""
-                runOnUiThread { ipInput.setText(ip); statusText.text = "Found: $ip"; loadStreams(ip) }
+                runOnUiThread {
+                    ipInput.setText(ip)
+                    statusText.text = "Found: $ip"
+                    loadStreams(ip)
+                }
                 socket.close()
-            } catch (e: Exception) { runOnUiThread { statusText.text = "Enter Receiver IP manually" } }
+            } catch (e: Exception) {
+                runOnUiThread { statusText.text = "Enter Receiver IP manually" }
+            }
         }
     }
 
@@ -91,5 +113,8 @@ class MainActivity : AppCompatActivity() {
         statusText.text = "Ready ($ip) - Tap or Long-press for VLC/MX"
     }
 
-    override fun onDestroy() { super.onDestroy(); player?.release() }
+    override fun onDestroy() {
+        super.onDestroy()
+        player?.release()
+    }
 }
