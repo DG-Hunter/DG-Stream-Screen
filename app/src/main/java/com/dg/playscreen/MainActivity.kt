@@ -143,7 +143,19 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
+                try {
+            setContentView(R.layout.activity_main)
+        } catch (t: Throwable) {
+            val tv = TextView(this).apply {
+                text = "CRASH ERROR:\n${t.message}\n\n${t.cause?.message}\n\n${t.stackTraceToString().take(800)}"
+                setTextColor(0xFFFFFFFF.toInt())
+                setBackgroundColor(0xFF991B1B.toInt())
+                setPadding(32, 64, 32, 32)
+                textSize = 13f
+            }
+            setContentView(tv)
+            return
+        }
 
         etIpAddress = findViewById(R.id.etIpAddress)
         tvStatus = findViewById(R.id.tvStatus)
