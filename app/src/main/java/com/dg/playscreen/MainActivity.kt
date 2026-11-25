@@ -564,3 +564,58 @@ class MainActivity : AppCompatActivity() {
                             else -> 0xFFEF4444.toInt()
                         }
                         pbQuality.progressTintList = ColorStateList.valueOf(qColor)
+                        tvQualityVal.setTextColor(qColor); tvInfoDb.setTextColor(qColor); tvSatFinderDb.setTextColor(qColor)
+                    }
+                } catch (_: Throwable) {}
+                delay(1200)
+            }
+        }
+    }
+
+    private fun extractTagInt(xml: String, tag: String): Int? =
+        Regex("<$tag>(\\d+)</$tag>", RegexOption.IGNORE_CASE).find(xml)?.groupValues?.get(1)?.toIntOrNull()
+
+    private fun openExternal(url: String, pkg: String, title: String) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(Uri.parse(url), "video/*")
+                setPackage(pkg)
+                putExtra("title", title)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            val fallback = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(Uri.parse(url), "video/*")
+                putExtra("title", title)
+            }
+            startActivity(Intent.createChooser(fallback, "Select Video Player"))
+        }
+    }
+
+    private fun sendRawXml(innerXml: String) {
+        try {
+            val fullXml = "<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>$innerXml"
+            val lenStr = String.format(Locale.US, "%07d", fullXml.length)
+            outputStream?.write("Start${lenStr}${fullXml}End".toByteArray(Charsets.UTF_8))
+            outputStream?.flush()
+        } catch (e: Exception) {
+            updateStatus("Receiver disconnected")
+        }
+    }
+
+    private fun updateStatus(msg: String) {
+        scope.launch(Dispatchers.Main) { tvStatus.text = msg }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            monitorJob?.cancel()
+            toneGenerator?.release()
+            mediaPlayer?.release()
+            libVlc?.release()
+            tcpSocket?.close()
+        } catch (_: Throwable) {}
+        scope.cancel()
+    }
+}
