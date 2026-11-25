@@ -10,6 +10,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Generate Clean Manifest
+        run: |
+          python3 -c '
+          p = "android"
+          xml = f"""<?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:{p}="http://schemas.{p}.com/apk/res/{p}">
+              <uses-permission {p}:name="{p}.permission.INTERNET" />
+              <uses-permission {p}:name="{p}.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission {p}:name="{p}.permission.ACCESS_WIFI_STATE" />
+              <uses-permission {p}:name="{p}.permission.CHANGE_WIFI_MULTICAST_STATE" />
+              <uses-permission {p}:name="{p}.permission.VIBRATE" />
+              <application {p}:allowBackup="true" {p}:label="DG Play Screen" {p}:usesCleartextTraffic="true" {p}:supportsRtl="true" {p}:theme="@style/Theme.AppCompat.NoActionBar">
+                  <activity {p}:name=".MainActivity" {p}:configChanges="orientation|screenSize|keyboardHidden" {p}:exported="true">
+                      <intent-filter>
+                          <action {p}:name="{p}.intent.action.MAIN" />
+                          <category {p}:name="{p}.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>"""
+          open("app/src/main/AndroidManifest.xml", "w").write(xml)
+          '
       - uses: actions/setup-java@v4
         with:
           java-version: '17'
