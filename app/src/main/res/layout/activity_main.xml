@@ -78,7 +78,7 @@
         android:visibility="gone"
         android:layout_marginBottom="6dp">
 
-        <org.videolan.libvlc.util.VLCVideoLayout
+        <FrameLayout
             android:id="@+id/vlcVideoLayout"
             android:layout_width="match_parent"
             android:layout_height="match_parent"/>
