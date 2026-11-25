@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Generate Clean Manifest
+      - name: Fix Android 7 Compatibility
         run: |
           python3 -c '
           p = "android"
@@ -31,6 +31,17 @@ jobs:
               </application>
           </manifest>"""
           open("app/src/main/AndroidManifest.xml", "w").write(xml)
+
+          for path in ["app/src/main/res/layout/activity_main.xml", "app/src/main/res/layout/item_channel.xml"]:
+              txt = open(path).read()
+              txt = txt.replace("paddingHorizontal=", "paddingLeft=").replace("layout_marginHorizontal=", "layout_marginLeft=").replace("layout_marginVertical=", "layout_marginTop=")
+              txt = txt.replace("org.videolan.libvlc.util.VLCVideoLayout", "FrameLayout")
+              open(path, "w").write(txt)
+
+          kt = open("app/src/main/java/com/dg/playscreen/MainActivity.kt").read()
+          kt = kt.replace("private lateinit var vlcVideoLayout: VLCVideoLayout", "private lateinit var vlcVideoLayout: FrameLayout")
+          kt = kt.replace("mediaPlayer?.attachViews(vlcVideoLayout, null, false, false)", "val v = VLCVideoLayout(this); vlcVideoLayout.addView(v); mediaPlayer?.attachViews(v, null, false, false)")
+          open("app/src/main/java/com/dg/playscreen/MainActivity.kt", "w").write(kt)
           '
       - uses: actions/setup-java@v4
         with:
