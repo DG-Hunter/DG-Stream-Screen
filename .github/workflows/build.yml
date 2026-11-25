@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Fix Android 7 Compatibility
+      - name: Fix Condor P6 Pro (Android 6/7 MultiDex & UI)
         run: |
           python3 -c '
           p = "android"
@@ -21,7 +21,7 @@ jobs:
               <uses-permission {p}:name="{p}.permission.ACCESS_WIFI_STATE" />
               <uses-permission {p}:name="{p}.permission.CHANGE_WIFI_MULTICAST_STATE" />
               <uses-permission {p}:name="{p}.permission.VIBRATE" />
-              <application {p}:allowBackup="true" {p}:label="DG Play Screen" {p}:usesCleartextTraffic="true" {p}:supportsRtl="true" {p}:theme="@style/Theme.AppCompat.NoActionBar">
+              <application {p}:name="androidx.multidex.MultiDexApplication" {p}:allowBackup="true" {p}:label="DG Play Screen" {p}:supportsRtl="true" {p}:theme="@style/Theme.AppCompat.NoActionBar">
                   <activity {p}:name=".MainActivity" {p}:configChanges="orientation|screenSize|keyboardHidden" {p}:exported="true">
                       <intent-filter>
                           <action {p}:name="{p}.intent.action.MAIN" />
@@ -31,6 +31,13 @@ jobs:
               </application>
           </manifest>"""
           open("app/src/main/AndroidManifest.xml", "w").write(xml)
+
+          gradle = open("app/build.gradle").read()
+          if "multiDexEnabled" not in gradle:
+              gradle = gradle.replace("versionName \"1.2\"", "versionName \"1.3\"\n        multiDexEnabled true")
+          if "multidex:2.0.1" not in gradle:
+              gradle = gradle.replace("dependencies {", "dependencies {\n    implementation \"androidx.multidex:multidex:2.0.1\"")
+          open("app/build.gradle", "w").write(gradle)
 
           for path in ["app/src/main/res/layout/activity_main.xml", "app/src/main/res/layout/item_channel.xml"]:
               txt = open(path).read()
