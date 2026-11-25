@@ -356,60 +356,132 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
     }
 
-    private fun scanForReceivers() {
-        updateStatus("Scanning network for ALi/GX receivers...")
+        private fun scanForReceivers() {
+        updateStatus("Scanning Wi-Fi network for receivers...")
         scope.launch {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+            val multicastLock = wifiManager?.createMulticastLock("dg_play_lock")?.apply {
+                setReferenceCounted(true)
+                acquire()
+            }
+
             try {
-                val socket = DatagramSocket()
-                socket.broadcast = true
-                socket.soTimeout = 3000
-                val msg = "smart_client_search".toByteArray()
-                socket.send(DatagramPacket(msg, msg.size, InetAddress.getByName("255.255.255.255"), 25860))
-                val buffer = ByteArray(1024)
-                val response = DatagramPacket(buffer, buffer.size)
-                socket.receive(response)
-                val foundIp = response.address.hostAddress ?: ""
-                withContext(Dispatchers.Main) { etIpAddress.setText(foundIp) }
-                updateStatus("Found Receiver: $foundIp")
-                socket.close()
+                // 1. Try UDP Broadcast on subnet (e.g., 192.168.1.255) & 255.255.255.255
+                val ipInt = wifiManager?.connectionInfo?.ipAddress ?: 0
+                val subnetPrefix = if (ipInt != 0) {
+                    String.format(
+                        Locale.US, "%d.%d.%d.",
+                        ipInt and 0xff, ipInt shr 8 and 0xff, ipInt shr 16 and 0xff
+                    )
+                } else {
+                    "192.168.1."
+                }
+
+                var foundIp: String? = null
+
+                try {
+                    val socket = DatagramSocket()
+                    socket.broadcast = true
+                    socket.soTimeout = 1500
+                    val msg = "smart_client_search".toByteArray()
+                    socket.send(DatagramPacket(msg, msg.size, InetAddress.getByName("${subnetPrefix}255"), 25860))
+                    socket.send(DatagramPacket(msg, msg.size, InetAddress.getByName("255.255.255.255"), 25860))
+
+                    val buffer = ByteArray(1024)
+                    val response = DatagramPacket(buffer, buffer.size)
+                    socket.receive(response)
+                    foundIp = response.address.hostAddress
+                    socket.close()
+                } catch (_: Exception) { }
+
+                // 2. Fallback: Fast TCP Port 20000 / 8000 scan on local Wi-Fi subnet
+                if (foundIp.isNullOrEmpty()) {
+                    val jobs = (1..254).map { i ->
+                        async(Dispatchers.IO) {
+                            val testIp = "$subnetPrefix$i"
+                            for (port in listOf(20000, 8000)) {
+                                try {
+                                    val s = Socket()
+                                    s.connect(java.net.InetSocketAddress(testIp, port), 250)
+                                    s.close()
+                                    return@async testIp
+                                } catch (_: Exception) { }
+                            }
+                            null
+                        }
+                    }
+                    foundIp = jobs.awaitAll().firstOrNull { it != null }
+                }
+
+                withContext(Dispatchers.Main) {
+                    if (!foundIp.isNullOrEmpty()) {
+                        etIpAddress.setText(foundIp)
+                        updateStatus("Found Receiver: $foundIp (Tap CONNECT)")
+                    } else {
+                        updateStatus("No receiver found. Check Wi-Fi & G-MScreen ON.")
+                    }
+                }
             } catch (e: Exception) {
-                updateStatus("Auto-scan failed. Enter IP manually.")
+                updateStatus("Scan error: ${e.message}")
+            } finally {
+                try {
+                    if (multicastLock?.isHeld == true) multicastLock.release()
+                } catch (_: Exception) { }
             }
         }
     }
 
     private fun connectAndFetchChannels(ip: String) {
         currentIp = ip
-        updateStatus("Connecting & fetching DVB channels from $ip...")
+        updateStatus("Connecting to $ip...")
         scope.launch {
             try {
                 tcpSocket?.close()
-                tcpSocket = Socket(ip, 20000)
-                tcpSocket?.soTimeout = 6000
-                outputStream = tcpSocket?.getOutputStream()
-                inputStream = tcpSocket?.getInputStream()
+                val socket = Socket()
+                socket.connect(java.net.InetSocketAddress(ip, 20000), 4000)
+                socket.soTimeout = 5000
+                tcpSocket = socket
+                outputStream = socket.getOutputStream()
+                inputStream = socket.getInputStream()
 
+                updateStatus("Connected! Fetching channels from $ip...")
+
+                // Send G-MScreen Login & Channel List Request
                 sendRawXml("<Command request=\"0\" />")
-                delay(300)
+                delay(350)
                 sendRawXml("<Command request=\"1\"><FromIndex>0</FromIndex><ToIndex>1000</ToIndex></Command>")
 
                 val responseBuilder = StringBuilder()
                 val buffer = ByteArray(8192)
-                var bytesRead: Int
-                while (true) {
+                var attempts = 0
+
+                while (attempts < 15) {
                     try {
-                        bytesRead = inputStream?.read(buffer) ?: -1
+                        val bytesRead = inputStream?.read(buffer) ?: -1
                         if (bytesRead <= 0) break
-                        responseBuilder.append(String(buffer, 0, bytesRead, Charsets.UTF_8))
-                        if (responseBuilder.contains("End")) break
-                    } catch (e: Exception) { break }
+                        val chunk = String(buffer, 0, bytesRead, Charsets.UTF_8)
+                        responseBuilder.append(chunk)
+                        if (chunk.contains("</Command>") || chunk.contains("End") || chunk.contains("</ChannelList>")) {
+                            break
+                        }
+                    } catch (_: java.net.SocketTimeoutException) {
+                        break
+                    }
+                    attempts++
                 }
-                parseChannelsXml(responseBuilder.toString())
+
+                val xmlData = responseBuilder.toString()
+                if (xmlData.isNotEmpty()) {
+                    parseChannelsXml(xmlData)
+                } else {
+                    updateStatus("Connected to $ip:20000, but receiver returned empty list.")
+                }
             } catch (e: Exception) {
-                updateStatus("Connection error: ${e.message}")
+                updateStatus("Failed ($ip): ${e.localizedMessage ?: "Check IP & G-MScreen"}")
             }
         }
     }
+
     private fun parseChannelsXml(rawResponse: String) {
         val startIdx = rawResponse.indexOf("<?xml")
         val endIdx = rawResponse.lastIndexOf("End")
