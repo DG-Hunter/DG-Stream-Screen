@@ -102,7 +102,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvStatus: TextView
     private lateinit var rvChannels: RecyclerView
     private lateinit var playerContainer: FrameLayout
-    private lateinit var vlcVideoLayout: VLCVideoLayout
+    private lateinit var vlcVideoLayout: FrameLayout
 
     private lateinit var layoutInfoBar: LinearLayout
     private lateinit var tvInfoChannelName: TextView
@@ -311,12 +311,17 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Throwable) {}
     }
 
-    private fun initLibVlcPlayer() {
+        private fun initLibVlcPlayer() {
         try {
+            val vlcView = VLCVideoLayout(this)
+            vlcVideoLayout.addView(vlcView, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ))
             val options = arrayListOf("--network-caching=1200", "--clock-jitter=0", "--clock-synchro=0")
             libVlc = LibVLC(this, options)
             mediaPlayer = MediaPlayer(libVlc)
-            mediaPlayer?.attachViews(vlcVideoLayout, null, false, false)
+            mediaPlayer?.attachViews(vlcView, null, false, false)
             mediaPlayer?.setEventListener { event ->
                 if (event.type == MediaPlayer.Event.Vout) {
                     val track = mediaPlayer?.currentVideoTrack
