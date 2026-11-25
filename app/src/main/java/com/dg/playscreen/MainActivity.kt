@@ -725,4 +725,10 @@ class MainActivity : AppCompatActivity() {
             out.flush()
         } catch (_: Throwable) {}
     }
+        
+    private fun updateStatus(msg: String) {
+        runOnUiThread {
+            tvStatus.text = msg
+        }
+    }
 
