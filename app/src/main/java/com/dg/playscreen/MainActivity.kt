@@ -445,38 +445,55 @@ class MainActivity : AppCompatActivity() {
 
                     updateStatus("Connected to $ip:$port! Fetching channels...")
 
-                    if (port == 20000) {
-                        // ALi G-MScreen 16-byte header + XML
-                        val req0 = "<Command request=\"0\" />".toByteArray()
-                        val hdr0 = java.nio.ByteBuffer.allocate(16).order(java.nio.ByteOrder.LITTLE_ENDIAN).putInt(req0.size).putInt(0).array()
-                        outputStream?.write(hdr0 + req0)
-                        delay(300)
-                        val req1 = "<Command request=\"1\"><FromIndex>0</FromIndex><ToIndex>1000</ToIndex></Command>".toByteArray()
-                        val hdr1 = java.nio.ByteBuffer.allocate(16).order(java.nio.ByteOrder.LITTLE_ENDIAN).putInt(req1.size).putInt(1).array()
-                        outputStream?.write(hdr1 + req1)
+                                        if (port == 20000) {
+                        // Standard ALi / G-MScreen Protocol Packet (GCDH Header + XML)
+                        fun buildAliPacket(xml: String): ByteArray {
+                            val payload = xml.toByteArray(Charsets.UTF_8)
+                            val buf = java.nio.ByteBuffer.allocate(16 + payload.size)
+                            buf.order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                            buf.put("GCDH".toByteArray(Charsets.US_ASCII)) // Magic Start Code
+                            buf.putInt(payload.size)                       // XML Length
+                            buf.putInt(0)                                  // Flags
+                            buf.putInt(0)                                  // Reserved
+                            buf.put(payload)
+                            return buf.array()
+                        }
+
+                        // 1. Login / Handshake
+                        outputStream?.write(buildAliPacket("<?xml version='1.0' encoding='utf-8' standalone='yes' ?><Command request=\"0\" />"))
+                        outputStream?.flush()
+                        delay(400)
+
+                        // 2. Request Channels (0 to 200 first, as many ALi receivers reject >250 at once)
+                        outputStream?.write(buildAliPacket("<?xml version='1.0' encoding='utf-8' standalone='yes' ?><Command request=\"1\"><FromIndex>0</FromIndex><ToIndex>200</ToIndex></Command>"))
                         outputStream?.flush()
                     } else {
-                        // GX / Standard XML
                         sendRawXml("<Command request=\"0\" />")
                         delay(300)
-                        sendRawXml("<Command request=\"1\"><FromIndex>0</FromIndex><ToIndex>1000</ToIndex></Command>")
+                        sendRawXml("<Command request=\"1\"><FromIndex>0</FromIndex><ToIndex>200</ToIndex></Command>")
                     }
 
                     val sb = StringBuilder()
                     val buf = ByteArray(8192)
-                    repeat(15) {
+                    repeat(20) {
                         try {
                             val r = inputStream?.read(buf) ?: -1
                             if (r <= 0) return@repeat
+                            // Strip binary header bytes and extract clean XML text
                             val chunk = String(buf, 0, r, Charsets.UTF_8)
                             sb.append(chunk)
                             if (chunk.contains("</Command>") || chunk.contains("End")) return@repeat
                         } catch (_: Exception) { return@repeat }
                     }
 
-                    if (sb.isNotEmpty()) parseChannelsXml(sb.toString())
-                    else updateStatus("Connected ($ip:$port) - Ready")
+                    val rawReply = sb.toString()
+                    if (rawReply.contains("<")) {
+                        parseChannelsXml(rawReply)
+                    } else {
+                        updateStatus("Connected ($ip:$port) - No XML reply (Bytes: ${rawReply.length})")
+                    }
                     return@launch
+
                 } catch (_: Exception) {}
             }
             updateStatus("Failed to connect to $ip (Tried ports 20000, 8000, 8888)")
@@ -682,30 +699,30 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun sendRawXml(innerXml: String) {
+        private fun sendRawXml(xml: String) {
         try {
-            val fullXml = "<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>$innerXml"
-            val lenStr = String.format(Locale.US, "%07d", fullXml.length)
-            outputStream?.write("Start${lenStr}${fullXml}End".toByteArray(Charsets.UTF_8))
-            outputStream?.flush()
-        } catch (e: Exception) {
-            updateStatus("Receiver disconnected")
-        }
-    }
+            val out = outputStream ?: return
+            val fullXml = if (xml.startsWith("<?xml")) {
+                xml
+            } else {
+                "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>$xml"
+            }
+            val payload = fullXml.toByteArray(Charsets.UTF_8)
 
-    private fun updateStatus(msg: String) {
-        scope.launch(Dispatchers.Main) { tvStatus.text = msg }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        try {
-            monitorJob?.cancel()
-            toneGenerator?.release()
-            mediaPlayer?.release()
-            libVlc?.release()
-            tcpSocket?.close()
+            if (tcpSocket?.port == 20000) {
+                val buf = java.nio.ByteBuffer.allocate(16 + payload.size)
+                buf.order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                buf.put("GCDH".toByteArray(Charsets.US_ASCII))
+                buf.putInt(payload.size)
+                buf.putInt(0)
+                buf.putInt(0)
+                buf.put(payload)
+                out.write(buf.array())
+            } else {
+                out.write(payload)
+                out.write("\n".toByteArray(Charsets.UTF_8))
+            }
+            out.flush()
         } catch (_: Throwable) {}
-        scope.cancel()
     }
-}
+
