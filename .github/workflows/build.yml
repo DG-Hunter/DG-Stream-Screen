@@ -20,5 +20,5 @@ jobs:
       - run: gradle assembleDebug
       - uses: actions/upload-artifact@v4
         with:
-          name: DG-Play-Screen-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: DG-Play-Screen-APKs
+          path: app/build/outputs/apk/debug/*.apk
