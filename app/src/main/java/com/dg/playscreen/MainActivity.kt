@@ -96,7 +96,6 @@ class ChannelAdapter(
 
     override fun getItemCount(): Int = items.size
 }
-
 class MainActivity : AppCompatActivity() {
 
     private lateinit var etIpAddress: EditText
@@ -144,125 +143,120 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        try {
-            setContentView(R.layout.activity_main)
+        setContentView(R.layout.activity_main)
 
-            etIpAddress = findViewById(R.id.etIpAddress)
-            tvStatus = findViewById(R.id.tvStatus)
-            rvChannels = findViewById(R.id.rvChannels)
-            playerContainer = findViewById(R.id.playerContainer)
-            vlcVideoLayout = findViewById(R.id.vlcVideoLayout)
+        etIpAddress = findViewById(R.id.etIpAddress)
+        tvStatus = findViewById(R.id.tvStatus)
+        rvChannels = findViewById(R.id.rvChannels)
+        playerContainer = findViewById(R.id.playerContainer)
+        vlcVideoLayout = findViewById(R.id.vlcVideoLayout)
 
-            layoutInfoBar = findViewById(R.id.layoutInfoBar)
-            tvInfoChannelName = findViewById(R.id.tvInfoChannelName)
-            tvBadgeRes = findViewById(R.id.tvBadgeRes)
-            tvBadgeCrypt = findViewById(R.id.tvBadgeCrypt)
-            tvInfoDb = findViewById(R.id.tvInfoDb)
-            tvInfoSatFreq = findViewById(R.id.tvInfoSatFreq)
-            tvInfoModulation = findViewById(R.id.tvInfoModulation)
-            tvInfoBitrate = findViewById(R.id.tvInfoBitrate)
-            tvInfoPids = findViewById(R.id.tvInfoPids)
-            pbStrength = findViewById(R.id.pbStrength)
-            tvStrengthVal = findViewById(R.id.tvStrengthVal)
-            pbQuality = findViewById(R.id.pbQuality)
-            tvQualityVal = findViewById(R.id.tvQualityVal)
+        layoutInfoBar = findViewById(R.id.layoutInfoBar)
+        tvInfoChannelName = findViewById(R.id.tvInfoChannelName)
+        tvBadgeRes = findViewById(R.id.tvBadgeRes)
+        tvBadgeCrypt = findViewById(R.id.tvBadgeCrypt)
+        tvInfoDb = findViewById(R.id.tvInfoDb)
+        tvInfoSatFreq = findViewById(R.id.tvInfoSatFreq)
+        tvInfoModulation = findViewById(R.id.tvInfoModulation)
+        tvInfoBitrate = findViewById(R.id.tvInfoBitrate)
+        tvInfoPids = findViewById(R.id.tvInfoPids)
+        pbStrength = findViewById(R.id.pbStrength)
+        tvStrengthVal = findViewById(R.id.tvStrengthVal)
+        pbQuality = findViewById(R.id.pbQuality)
+        tvQualityVal = findViewById(R.id.tvQualityVal)
 
-            tvSatFinderFreq = findViewById(R.id.tvSatFinderFreq)
-            tvSatFinderDb = findViewById(R.id.tvSatFinderDb)
-            pbSatSignal = findViewById(R.id.pbSatSignal)
-            pbSatQuality = findViewById(R.id.pbSatQuality)
+        tvSatFinderFreq = findViewById(R.id.tvSatFinderFreq)
+        tvSatFinderDb = findViewById(R.id.tvSatFinderDb)
+        pbSatSignal = findViewById(R.id.pbSatSignal)
+        pbSatQuality = findViewById(R.id.pbSatQuality)
 
-            try { toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 90) } catch (_: Throwable) {}
-            initLibVlcPlayer()
+        try { toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 90) } catch (_: Throwable) {}
+        initLibVlcPlayer()
 
-            val prefs = getSharedPreferences("DGPlayPrefs", Context.MODE_PRIVATE)
-            etIpAddress.setText(prefs.getString("last_ip", ""))
+        val prefs = getSharedPreferences("DGPlayPrefs", Context.MODE_PRIVATE)
+        etIpAddress.setText(prefs.getString("last_ip", ""))
 
-            adapter = ChannelAdapter(
-                filteredChannels,
-                onPlayClick = { ch -> showPlayerDialog(ch) },
-                onCopyClick = { ch -> copyText(ch.rawIdent, "Copied: ${ch.rawIdent}") },
-                onMoveUpClick = { pos -> moveChannelUp(pos) },
-                onDeleteClick = { pos -> deleteChannel(pos) }
-            )
-            rvChannels.layoutManager = LinearLayoutManager(this)
-            rvChannels.adapter = adapter
+        adapter = ChannelAdapter(
+            filteredChannels,
+            onPlayClick = { ch -> showPlayerDialog(ch) },
+            onCopyClick = { ch -> copyText(ch.rawIdent, "Copied: ${ch.rawIdent}") },
+            onMoveUpClick = { pos -> moveChannelUp(pos) },
+            onDeleteClick = { pos -> deleteChannel(pos) }
+        )
+        rvChannels.layoutManager = LinearLayoutManager(this)
+        rvChannels.adapter = adapter
 
-            findViewById<Button>(R.id.btnStopPlayer).setOnClickListener {
-                try { mediaPlayer?.stop() } catch (_: Throwable) {}
-                playerContainer.visibility = View.GONE
-                if (isFullscreen) toggleFullscreen()
-            }
-            findViewById<Button>(R.id.btnFullscreen).setOnClickListener { toggleFullscreen() }
-
-            val layoutChannels = findViewById<LinearLayout>(R.id.layoutChannels)
-            val layoutRemote = findViewById<ScrollView>(R.id.layoutRemote)
-            val layoutSatFinder = findViewById<LinearLayout>(R.id.layoutSatFinder)
-            val btnTabChannels = findViewById<Button>(R.id.btnTabChannels)
-            val btnTabRemote = findViewById<Button>(R.id.btnTabRemote)
-            val btnTabSatFinder = findViewById<Button>(R.id.btnTabSatFinder)
-
-            fun selectTab(tab: Int) {
-                layoutChannels.visibility = if (tab == 0) View.VISIBLE else View.GONE
-                layoutRemote.visibility = if (tab == 1) View.VISIBLE else View.GONE
-                layoutSatFinder.visibility = if (tab == 2) View.VISIBLE else View.GONE
-                btnTabChannels.setBackgroundColor(if (tab == 0) 0xFF0284C7.toInt() else 0xFF1E293B.toInt())
-                btnTabRemote.setBackgroundColor(if (tab == 1) 0xFF0284C7.toInt() else 0xFF1E293B.toInt())
-                btnTabSatFinder.setBackgroundColor(if (tab == 2) 0xFF0284C7.toInt() else 0xFF1E293B.toInt())
-                if (tab == 2) startTelemetryMonitor()
-            }
-
-            btnTabChannels.setOnClickListener { selectTab(0) }
-            btnTabRemote.setOnClickListener { selectTab(1) }
-            btnTabSatFinder.setOnClickListener { selectTab(2) }
-
-            val btnToggleBeep = findViewById<Button>(R.id.btnToggleBeep)
-            btnToggleBeep.setOnClickListener {
-                isBeepActive = !isBeepActive
-                btnToggleBeep.text = if (isBeepActive) "Disable Audio Beep" else "Enable Audio Beep"
-                btnToggleBeep.setBackgroundColor(if (isBeepActive) 0xFFDC2626.toInt() else 0xFF0284C7.toInt())
-            }
-
-            findViewById<EditText>(R.id.etSearchChannel).addTextChangedListener(object : TextWatcher {
-                override fun afterTextChanged(s: Editable?) {
-                    val q = s.toString().lowercase()
-                                        filteredChannels.clear()
-                    filteredChannels.addAll(
-                        allChannels.filter {
-                            it.rawIdent.lowercase().contains(q) ||
-                            it.provider.lowercase().contains(q) ||
-                            it.freq.contains(q)
-                        }
-                    )
-                    adapter.notifyDataSetChanged()
-                }
-                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            })
-
-            findViewById<Button>(R.id.btnScan).setOnClickListener { scanForReceivers() }
-            findViewById<Button>(R.id.btnConnect).setOnClickListener {
-                val ip = etIpAddress.text.toString().trim()
-                if (ip.isNotEmpty()) {
-                    prefs.edit().putString("last_ip", ip).apply()
-                    connectAndFetchChannels(ip)
-                }
-            }
-
-            bindKey(R.id.btnPower, 10); bindKey(R.id.btnMute, 11)
-            bindKey(R.id.btnUp, 19); bindKey(R.id.btnDown, 20)
-            bindKey(R.id.btnLeft, 21); bindKey(R.id.btnRight, 22)
-            bindKey(R.id.btnOk, 23); bindKey(R.id.btnMenu, 24)
-            bindKey(R.id.btnInfo, 26); bindKey(R.id.btnExit, 25)
-            bindKey(R.id.btnVolUp, 27); bindKey(R.id.btnVolDown, 28)
-            bindKey(R.id.btnChUp, 29); bindKey(R.id.btnChDown, 30)
-            bindKey(R.id.btnRed, 31); bindKey(R.id.btnGreen, 32)
-            bindKey(R.id.btnYellow, 33); bindKey(R.id.btnBlue, 34)
-        } catch (e: Throwable) {
-            Toast.makeText(this, "Init error: ${e.message}", Toast.LENGTH_LONG).show()
+        findViewById<Button>(R.id.btnStopPlayer).setOnClickListener {
+            try { mediaPlayer?.stop() } catch (_: Throwable) {}
+            playerContainer.visibility = View.GONE
+            if (isFullscreen) toggleFullscreen()
         }
-    }
+        findViewById<Button>(R.id.btnFullscreen).setOnClickListener { toggleFullscreen() }
 
+        val layoutChannels = findViewById<LinearLayout>(R.id.layoutChannels)
+        val layoutRemote = findViewById<ScrollView>(R.id.layoutRemote)
+        val layoutSatFinder = findViewById<LinearLayout>(R.id.layoutSatFinder)
+        val btnTabChannels = findViewById<Button>(R.id.btnTabChannels)
+        val btnTabRemote = findViewById<Button>(R.id.btnTabRemote)
+        val btnTabSatFinder = findViewById<Button>(R.id.btnTabSatFinder)
+
+        fun selectTab(tab: Int) {
+            layoutChannels.visibility = if (tab == 0) View.VISIBLE else View.GONE
+            layoutRemote.visibility = if (tab == 1) View.VISIBLE else View.GONE
+            layoutSatFinder.visibility = if (tab == 2) View.VISIBLE else View.GONE
+            btnTabChannels.setBackgroundColor(if (tab == 0) 0xFF0284C7.toInt() else 0xFF1E293B.toInt())
+            btnTabRemote.setBackgroundColor(if (tab == 1) 0xFF0284C7.toInt() else 0xFF1E293B.toInt())
+            btnTabSatFinder.setBackgroundColor(if (tab == 2) 0xFF0284C7.toInt() else 0xFF1E293B.toInt())
+            if (tab == 2) startTelemetryMonitor()
+        }
+
+        btnTabChannels.setOnClickListener { selectTab(0) }
+        btnTabRemote.setOnClickListener { selectTab(1) }
+        btnTabSatFinder.setOnClickListener { selectTab(2) }
+
+        val btnToggleBeep = findViewById<Button>(R.id.btnToggleBeep)
+        btnToggleBeep.setOnClickListener {
+            isBeepActive = !isBeepActive
+            btnToggleBeep.text = if (isBeepActive) "Disable Audio Beep" else "Enable Audio Beep"
+            btnToggleBeep.setBackgroundColor(if (isBeepActive) 0xFFDC2626.toInt() else 0xFF0284C7.toInt())
+        }
+
+        findViewById<EditText>(R.id.etSearchChannel).addTextChangedListener(object : TextWatcher {
+            override fun afterTextChanged(s: Editable?) {
+                val q = s.toString().lowercase()
+                filteredChannels.clear()
+                filteredChannels.addAll(
+                    allChannels.filter {
+                        it.rawIdent.lowercase().contains(q) ||
+                        it.provider.lowercase().contains(q) ||
+                        it.freq.contains(q)
+                    }
+                )
+                adapter.notifyDataSetChanged()
+            }
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+        })
+
+        findViewById<Button>(R.id.btnScan).setOnClickListener { scanForReceivers() }
+        findViewById<Button>(R.id.btnConnect).setOnClickListener {
+            val ip = etIpAddress.text.toString().trim()
+            if (ip.isNotEmpty()) {
+                prefs.edit().putString("last_ip", ip).apply()
+                connectAndFetchChannels(ip)
+            }
+        }
+
+        bindKey(R.id.btnPower, 10); bindKey(R.id.btnMute, 11)
+        bindKey(R.id.btnUp, 19); bindKey(R.id.btnDown, 20)
+        bindKey(R.id.btnLeft, 21); bindKey(R.id.btnRight, 22)
+        bindKey(R.id.btnOk, 23); bindKey(R.id.btnMenu, 24)
+        bindKey(R.id.btnInfo, 26); bindKey(R.id.btnExit, 25)
+        bindKey(R.id.btnVolUp, 27); bindKey(R.id.btnVolDown, 28)
+        bindKey(R.id.btnChUp, 29); bindKey(R.id.btnChDown, 30)
+        bindKey(R.id.btnRed, 31); bindKey(R.id.btnGreen, 32)
+        bindKey(R.id.btnYellow, 33); bindKey(R.id.btnBlue, 34)
+    }
     private fun toggleFullscreen() {
         isFullscreen = !isFullscreen
         val header = findViewById<LinearLayout>(R.id.headerBar)
@@ -319,7 +313,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun initLibVlcPlayer() {
         try {
-            val options = arrayListOf("--network-caching=1200", "--clock-jitter=0", "--clock-synchro=0", "--avcodec-hw=any")
+            val options = arrayListOf("--network-caching=1200", "--clock-jitter=0", "--clock-synchro=0")
             libVlc = LibVLC(this, options)
             mediaPlayer = MediaPlayer(libVlc)
             mediaPlayer?.attachViews(vlcVideoLayout, null, false, false)
@@ -344,6 +338,7 @@ class MainActivity : AppCompatActivity() {
         clipboard.setPrimaryClip(ClipData.newPlainText("DGPlay", text))
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
     }
+
     private fun scanForReceivers() {
         updateStatus("Scanning network for ALi/GX receivers...")
         scope.launch {
@@ -398,7 +393,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-
     private fun parseChannelsXml(rawResponse: String) {
         val startIdx = rawResponse.indexOf("<?xml")
         val endIdx = rawResponse.lastIndexOf("End")
@@ -453,7 +447,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 eventType = parser.next()
             }
-        } catch (_: Exception) {}
+        } catch (_: Throwable) {}
 
         scope.launch(Dispatchers.Main) {
             allChannels.clear(); allChannels.addAll(parsed)
@@ -514,6 +508,7 @@ class MainActivity : AppCompatActivity() {
                                 openExternal(streamUrl, "org.videolan.vlc", channel.rawIdent)
                             }
                         } else {
+                            Toast.makeText(this@MainActivity, "Opening external player...", Toast.LENGTH_SHORT).show()
                             openExternal(streamUrl, "org.videolan.vlc", channel.rawIdent)
                         }
                     }
@@ -534,4 +529,38 @@ class MainActivity : AppCompatActivity() {
                     val nowRx = TrafficStats.getTotalRxBytes()
                     val nowMs = System.currentTimeMillis()
                     val diffSec = (nowMs - lastTimeMs) / 1000.0
+                    val mbps = if (diffSec > 0 && nowRx >= lastRxBytes) ((nowRx - lastRxBytes) * 8.0) / (diffSec * 1_000_000.0) else 0.0
+                    lastRxBytes = nowRx; lastTimeMs = nowMs
 
+                    sendRawXml("<Command request=\"1030\" />")
+                    delay(350)
+
+                    var strength = 85; var quality = 80
+                    val available = inputStream?.available() ?: 0
+                    if (available > 0) {
+                        val buffer = ByteArray(2048)
+                        val read = inputStream?.read(buffer) ?: 0
+                        val xml = String(buffer, 0, read, Charsets.UTF_8)
+                        strength = extractTagInt(xml, "SignalStrength") ?: extractTagInt(xml, "Strength") ?: 85
+                        quality = extractTagInt(xml, "SignalQuality") ?: extractTagInt(xml, "Quality") ?: 80
+                    }
+
+                    val dbStr = String.format(Locale.US, "%.1f dB", quality * 0.175)
+                    val bitrateStr = String.format(Locale.US, "Bitrate: %.2f Mbps • %s", mbps, videoResInfo)
+
+                    if (isBeepActive && quality > 30) {
+                        try { toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP, 80) } catch (_: Throwable) {}
+                    }
+
+                    withContext(Dispatchers.Main) {
+                        pbStrength.progress = strength; tvStrengthVal.text = "$strength%"
+                        pbQuality.progress = quality; tvQualityVal.text = "$quality%"
+                        tvInfoDb.text = dbStr; tvInfoBitrate.text = bitrateStr
+                        tvSatFinderDb.text = dbStr; pbSatSignal.progress = strength; pbSatQuality.progress = quality
+
+                        val qColor = when {
+                            quality >= 70 -> 0xFF22C55E.toInt()
+                            quality >= 45 -> 0xFFEAB308.toInt()
+                            else -> 0xFFEF4444.toInt()
+                        }
+                        pbQuality.progressTintList = ColorStateList.valueOf(qColor)
