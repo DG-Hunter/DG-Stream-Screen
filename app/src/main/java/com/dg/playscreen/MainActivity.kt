@@ -575,6 +575,9 @@ class MainActivity : AppCompatActivity() {
 
                 val out = outputStream!!
                 val inStr = inputStream!!
+             out.write(wrapGmScreenPacket("{\"request\":\"998\",\"ClientType\":\"0\",\"MobileType\":\"Android\",\"AppVersion\":\"1.0\"}"))
+             out.flush()
+             delay(250)
 
                 // 1. Handshake & Device Info (Request 15 or Handshake)
                 out.write(wrapGmScreenPacket("{\"request\":\"15\"}"))
@@ -606,7 +609,8 @@ class MainActivity : AppCompatActivity() {
                 var lastRawDebug = ""
 
                 while (hasMore && fromIndex < 5000) {
-                    val cmd = "{\"request\":\"0\",\"FromIndex\":\"$fromIndex\",\"ToIndex\":\"${fromIndex + step - 1}\"}"
+                    val cmd = "{\"request\":\"0\",\"FromIndex\":$fromIndex,\"ToIndex\":${fromIndex + step - 1}}"
+
                     out.write(wrapGmScreenPacket(cmd))
                     out.flush()
 
