@@ -260,16 +260,58 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        bindKey(R.id.btnPower, 10); bindKey(R.id.btnMute, 11)
-        bindKey(R.id.btnUp, 19); bindKey(R.id.btnDown, 20)
-        bindKey(R.id.btnLeft, 21); bindKey(R.id.btnRight, 22)
-        bindKey(R.id.btnOk, 23); bindKey(R.id.btnMenu, 24)
-        bindKey(R.id.btnInfo, 26); bindKey(R.id.btnExit, 25)
-        bindKey(R.id.btnVolUp, 27); bindKey(R.id.btnVolDown, 28)
-        bindKey(R.id.btnChUp, 29); bindKey(R.id.btnChDown, 30)
-        bindKey(R.id.btnRed, 31); bindKey(R.id.btnGreen, 32)
-        bindKey(R.id.btnYellow, 33); bindKey(R.id.btnBlue, 34)
+        bindKey(R.id.btnPower, 1)
+        bindKey(R.id.btnMute, 2)
+        bindKey(R.id.btnTvRadio, 31)
+        bindKey(R.id.btnRecall, 32)
+
+        bindKey(R.id.btnSat, 37)
+        bindKey(R.id.btnFav, 30)
+        bindKey(R.id.btnEpg, 29)
+        bindKey(R.id.btnFind, 40)
+
+        bindKey(R.id.btnNum0, 16)
+        bindKey(R.id.btnNum1, 7)
+        bindKey(R.id.btnNum2, 8)
+        bindKey(R.id.btnNum3, 9)
+        bindKey(R.id.btnNum4, 10)
+        bindKey(R.id.btnNum5, 11)
+        bindKey(R.id.btnNum6, 12)
+        bindKey(R.id.btnNum7, 13)
+        bindKey(R.id.btnNum8, 14)
+        bindKey(R.id.btnNum9, 15)
+        bindKey(R.id.btnAudio, 38)
+        bindKey(R.id.btnSub, 39)
+
+        bindKey(R.id.btnMenu, 26)
+        bindKey(R.id.btnExit, 27)
+        bindKey(R.id.btnInfo, 28)
+        bindKey(R.id.btnPage, 25)
+
+        bindKey(R.id.btnUp, 21)
+        bindKey(R.id.btnDown, 22)
+        bindKey(R.id.btnLeft, 23)
+        bindKey(R.id.btnRight, 24)
+        bindKey(R.id.btnOk, 25)
+
+        bindKey(R.id.btnVolUp, 17)
+        bindKey(R.id.btnVolDown, 18)
+        bindKey(R.id.btnChUp, 19)
+        bindKey(R.id.btnChDown, 20)
+
+        bindKey(R.id.btnRed, 33)
+        bindKey(R.id.btnGreen, 34)
+        bindKey(R.id.btnYellow, 35)
+        bindKey(R.id.btnBlue, 36)
+
+        bindKey(R.id.btnRew, 41)
+        bindKey(R.id.btnPlayPause, 42)
+        bindKey(R.id.btnStopMedia, 43)
+        bindKey(R.id.btnFwd, 44)
+        bindKey(R.id.btnRec, 45)
+
     }
+    
     private fun toggleFullscreen() {
         isFullscreen = !isFullscreen
         val header = findViewById<LinearLayout>(R.id.headerBar)
