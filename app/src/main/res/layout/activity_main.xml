@@ -516,7 +516,7 @@
     </ScrollView>
 
 
-    <LinearLayout
+        <LinearLayout
         android:id="@+id/layoutSatFinder"
         android:layout_width="match_parent"
         android:layout_height="0dp"
@@ -529,49 +529,127 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="LIVE SATELLITE FINDER"
+            android:text="LIVE SATELLITE FINDER PRO"
             android:textColor="#38BDF8"
             android:textSize="15sp"
             android:textStyle="bold"/>
 
-        <TextView
-            android:id="@+id/tvSatFinderFreq"
-            android:layout_width="wrap_content"
+        <!-- Active Satellite & Transponder Info Box -->
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Transponder: Waiting for channel..."
-            android:textColor="#94A3B8"
-            android:textSize="12sp"
-            android:layout_marginTop="4dp"
-            android:layout_marginBottom="12dp"/>
+            android:orientation="vertical"
+            android:background="#0F172A"
+            android:padding="10dp"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="10dp">
 
+            <TextView
+                android:id="@+id/tvSatFinderSatName"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Satellite: Detecting..."
+                android:textColor="#38BDF8"
+                android:textSize="14sp"
+                android:textStyle="bold"/>
+
+            <TextView
+                android:id="@+id/tvSatFinderFreq"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Transponder: Waiting for tuner data..."
+                android:textColor="#E2E8F0"
+                android:textSize="13sp"
+                android:layout_marginTop="4dp"/>
+        </LinearLayout>
+
+        <!-- SNR dB Big Display -->
         <TextView
             android:id="@+id/tvSatFinderDb"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="14.2 dB"
+            android:text="0.0 dB"
             android:textColor="#4ADE80"
-            android:textSize="36sp"
+            android:textSize="38sp"
             android:textStyle="bold"
             android:gravity="center"
             android:layout_marginBottom="14dp"/>
+
+        <!-- Signal Strength Row (RED Bar + Percentage) -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="4dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:text="SIGNAL STRENGTH (S)"
+                android:textColor="#FCA5A5"
+                android:textSize="12sp"
+                android:textStyle="bold"/>
+
+            <TextView
+                android:id="@+id/tvSatStrengthVal"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0%"
+                android:textColor="#EF4444"
+                android:textSize="16sp"
+                android:textStyle="bold"/>
+        </LinearLayout>
 
         <ProgressBar
             android:id="@+id/pbSatSignal"
             style="?android:attr/progressBarStyleHorizontal"
             android:layout_width="match_parent"
-            android:layout_height="16dp"
+            android:layout_height="18dp"
             android:max="100"
-            android:progress="85"
-            android:layout_marginBottom="10dp"/>
+            android:progress="0"
+            android:progressTint="#EF4444"
+            android:progressBackgroundTint="#334155"
+            android:layout_marginBottom="14dp"/>
+
+        <!-- Signal Quality Row (GREEN Bar + Percentage) -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="4dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:text="SIGNAL QUALITY (Q)"
+                android:textColor="#86EFAC"
+                android:textSize="12sp"
+                android:textStyle="bold"/>
+
+            <TextView
+                android:id="@+id/tvSatQualityVal"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0%"
+                android:textColor="#22C55E"
+                android:textSize="16sp"
+                android:textStyle="bold"/>
+        </LinearLayout>
 
         <ProgressBar
             android:id="@+id/pbSatQuality"
             style="?android:attr/progressBarStyleHorizontal"
             android:layout_width="match_parent"
-            android:layout_height="16dp"
+            android:layout_height="18dp"
             android:max="100"
-            android:progress="80"
-            android:layout_marginBottom="16dp"/>
+            android:progress="0"
+            android:progressTint="#22C55E"
+            android:progressBackgroundTint="#334155"
+            android:layout_marginBottom="18dp"/>
 
         <Button
             android:id="@+id/btnToggleBeep"
