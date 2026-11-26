@@ -424,205 +424,216 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+
+    private fun wrapGmScreenPacket(payloadStr: String): ByteArray {
+        val payloadBytes = payloadStr.toByteArray(Charsets.UTF_8)
+        val header = String.format(Locale.US, "Start%07dEnd", payloadBytes.size).toByteArray(Charsets.US_ASCII)
+        return header + payloadBytes
+    }
+
+    private fun readGmScreenResponse(inStream: InputStream): String {
+        val allBytes = java.io.ByteArrayOutputStream()
+        val buf = ByteArray(8192)
+        var emptyReads = 0
+
+        while (emptyReads < 4) {
+            try {
+                val r = inStream.read(buf)
+                if (r <= 0) break
+                // Skip 16-byte GCDH ack header if present at start
+                var offset = 0
+                if (r >= 16 && buf[0] == 'G'.code.toByte() && buf[1] == 'C'.code.toByte() && buf[2] == 'D'.code.toByte() && buf[3] == 'H'.code.toByte()) {
+                    offset = 16
+                }
+                if (r > offset) {
+                    allBytes.write(buf, offset, r - offset)
+                }
+                if (inStream.available() == 0) {
+                    Thread.sleep(200)
+                    if (inStream.available() == 0) break
+                }
+            } catch (_: Exception) {
+                emptyReads++
+                break
+            }
+        }
+
+        val raw = allBytes.toByteArray()
+        if (raw.isEmpty()) return ""
+
+        // Check if response is Zlib compressed (0x78 0x9C or 0x78 0xDA)
+        for (i in 0 until raw.size - 1) {
+            if (raw[i] == 0x78.toByte() && (raw[i + 1] == 0x9C.toByte() || raw[i + 1] == 0xDA.toByte() || raw[i + 1] == 0x01.toByte())) {
+                try {
+                    val inflater = java.util.zip.Inflater()
+                    inflater.setInput(raw, i, raw.size - i)
+                    val out = java.io.ByteArrayOutputStream()
+                    val tmp = ByteArray(4096)
+                    while (!inflater.finished()) {
+                        val count = inflater.inflate(tmp)
+                        if (count == 0) break
+                        out.write(tmp, 0, count)
+                    }
+                    inflater.end()
+                    val unzipped = out.toString("UTF-8")
+                    if (unzipped.isNotEmpty()) return unzipped
+                } catch (_: Exception) {}
+            }
+        }
+        return String(raw, Charsets.UTF_8)
+    }
+
     private fun connectAndFetchChannels(rawIp: String) {
         val parts = rawIp.trim().split(":")
         val ip = parts[0]
-        val customPort = parts.getOrNull(1)?.toIntOrNull()
+        val port = parts.getOrNull(1)?.toIntOrNull() ?: 20000
         currentIp = ip
-        updateStatus("Connecting to $ip...")
+        updateStatus("Connecting to $ip:$port...")
 
         scope.launch {
-            val ports = if (customPort != null) listOf(customPort) else listOf(20000, 8000, 8888)
-            for (port in ports) {
-                try {
-                    tcpSocket?.close()
-                    val s = Socket()
-                    s.connect(java.net.InetSocketAddress(ip, port), 3000)
-                    s.soTimeout = 5000
-                    tcpSocket = s
-                    outputStream = s.getOutputStream()
-                    inputStream = s.getInputStream()
+            try {
+                tcpSocket?.close()
+                val s = Socket()
+                s.connect(InetSocketAddress(ip, port), 4000)
+                s.soTimeout = 3000
+                tcpSocket = s
+                outputStream = s.getOutputStream()
+                inputStream = s.getInputStream()
 
-                    updateStatus("Connected to $ip:$port! Fetching channels...")
+                updateStatus("Handshaking with receiver ($ip)...")
 
-                                        if (port == 20000) {
-                        // Standard ALi / G-MScreen Protocol Packet (GCDH Header + XML)
-                        fun buildAliPacket(xml: String): ByteArray {
-                            val payload = xml.toByteArray(Charsets.UTF_8)
-                            val buf = java.nio.ByteBuffer.allocate(16 + payload.size)
-                            buf.order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                            buf.put("GCDH".toByteArray(Charsets.US_ASCII)) // Magic Start Code
-                            buf.putInt(payload.size)                       // XML Length
-                            buf.putInt(0)                                  // Flags
-                            buf.putInt(0)                                  // Reserved
-                            buf.put(payload)
-                            return buf.array()
-                        }
+                // 1. Official G-MScreen Login Handshake (request 998)
+                outputStream?.write(wrapGmScreenPacket("<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><Command request=\"998\" />"))
+                outputStream?.flush()
+                delay(250)
+                readGmScreenResponse(inputStream!!)
 
-                        // 1. Login / Handshake
-                        outputStream?.write(buildAliPacket("<?xml version='1.0' encoding='utf-8' standalone='yes' ?><Command request=\"0\" />"))
-                        outputStream?.flush()
-                        delay(400)
+                // 2. Get STB Info & Total Channel Count (request 15)
+                outputStream?.write(wrapGmScreenPacket("{\"request\":\"15\"}"))
+                outputStream?.flush()
+                delay(250)
+                val infoReply = readGmScreenResponse(inputStream!!)
+                val totalChannels = Regex("\"ChannelNum\"\\s*:\\s*(\\d+)").find(infoReply)?.groupValues?.get(1)?.toIntOrNull() ?: 300
+                val maxFetch = minOf(totalChannels, 1000)
 
-                        // 2. Request Channels (0 to 200 first, as many ALi receivers reject >250 at once)
-                        outputStream?.write(buildAliPacket("<?xml version='1.0' encoding='utf-8' standalone='yes' ?><Command request=\"1\"><FromIndex>0</FromIndex><ToIndex>200</ToIndex></Command>"))
-                        outputStream?.flush()
+                updateStatus("Fetching channels (0 to $maxFetch)...")
+
+                // 3. Fetch Channels in batches of 100 (Official G-MScreen method)
+                val fetchedChannels = mutableListOf<DvbChannel>()
+                var startIdx = 0
+                while (startIdx < maxFetch) {
+                    val endIdx = minOf(startIdx + 99, maxFetch - 1)
+                    val reqJson = "{\"request\":\"0\",\"FromIndex\":\"$startIdx\",\"ToIndex\":\"$endIdx\"}"
+                    outputStream?.write(wrapGmScreenPacket(reqJson))
+                    outputStream?.flush()
+                    delay(300)
+
+                    val batchReply = readGmScreenResponse(inputStream!!)
+                    if (batchReply.isEmpty()) break
+
+                    val batchList = parseGmScreenChannels(batchReply, fetchedChannels.size)
+                    if (batchList.isEmpty()) break
+                    fetchedChannels.addAll(batchList)
+                    startIdx += 100
+                }
+
+                withContext(Dispatchers.Main) {
+                    allChannels.clear()
+                    allChannels.addAll(fetchedChannels)
+                    filteredChannels.clear()
+                    filteredChannels.addAll(fetchedChannels)
+                    adapter.notifyDataSetChanged()
+                    if (fetchedChannels.isNotEmpty()) {
+                        updateStatus("Connected! Loaded ${fetchedChannels.size} channels from $ip")
                     } else {
-                        sendRawXml("<Command request=\"0\" />")
-                        delay(300)
-                        sendRawXml("<Command request=\"1\"><FromIndex>0</FromIndex><ToIndex>200</ToIndex></Command>")
-                    }
-
-                    val sb = StringBuilder()
-                    val buf = ByteArray(8192)
-                    repeat(20) {
-                        try {
-                            val r = inputStream?.read(buf) ?: -1
-                            if (r <= 0) return@repeat
-                            // Strip binary header bytes and extract clean XML text
-                            val chunk = String(buf, 0, r, Charsets.UTF_8)
-                            sb.append(chunk)
-                            if (chunk.contains("</Command>") || chunk.contains("End")) return@repeat
-                        } catch (_: Exception) { return@repeat }
-                    }
-
-                    val rawReply = sb.toString()
-                    if (rawReply.contains("<")) {
-                        parseChannelsXml(rawReply)
-                    } else {
-                        updateStatus("Connected ($ip:$port) - No XML reply (Bytes: ${rawReply.length})")
-                    }
-                    return@launch
-
-                } catch (_: Exception) {}
-            }
-            updateStatus("Failed to connect to $ip (Tried ports 20000, 8000, 8888)")
-        }
-    }
-
-    private fun parseChannelsXml(rawResponse: String) {
-        val startIdx = rawResponse.indexOf("<?xml")
-        val endIdx = rawResponse.lastIndexOf("End")
-        if (startIdx == -1) { updateStatus("Connected, no channel list returned."); return }
-        val xmlContent = if (endIdx > startIdx) rawResponse.substring(startIdx, endIdx) else rawResponse.substring(startIdx)
-
-        val parsed = mutableListOf<DvbChannel>()
-        try {
-            val parser = XmlPullParserFactory.newInstance().newPullParser()
-            parser.setInput(StringReader(xmlContent))
-            var eventType = parser.eventType
-            var rawName = ""; var provider = ""; var serviceId = ""
-            var satName = "Satellite"; var freq = ""; var pol = ""; var sym = ""
-            var dvbSys = "DVB-S2"; var mod = "8PSK"; var fec = "3/4"
-            var scramble = false; var hd = true; var vPid = "---"; var aPid = "---"
-            var idx = 1
-
-            while (eventType != XmlPullParser.END_DOCUMENT) {
-                val tag = parser.name
-                when (eventType) {
-                    XmlPullParser.START_TAG -> {
-                        when {
-                            tag.equals("ProgramName", true) || tag.equals("Name", true) -> {
-                                rawName = parser.nextText().trim()
-                                hd = rawName.contains("HD", true) || rawName.contains("4K", true)
-                            }
-                            tag.equals("ProviderName", true) || tag.equals("Provider", true) -> provider = parser.nextText().trim()
-                            tag.equals("ServiceID", true) || tag.equals("ProgramIndex", true) -> serviceId = parser.nextText().trim()
-                            tag.equals("SatName", true) -> satName = parser.nextText().trim()
-                            tag.equals("Freq", true) || tag.equals("Frequency", true) -> freq = parser.nextText().trim()
-                            tag.equals("Polar", true) || tag.equals("Pol", true) -> {
-                                val p = parser.nextText().trim()
-                                pol = if (p == "0" || p.equals("H", true)) "H" else if (p == "1" || p.equals("V", true)) "V" else p
-                            }
-                            tag.equals("SymbolRate", true) || tag.equals("Sym", true) -> sym = parser.nextText().trim()
-                            tag.equals("System", true) || tag.equals("DvbType", true) -> dvbSys = when (parser.nextText().trim()) { "0" -> "DVB-S"; "1" -> "DVB-S2"; "2" -> "DVB-S2X"; else -> "DVB-S2" }
-                            tag.equals("Modulation", true) || tag.equals("Mod", true) -> mod = when (parser.nextText().trim()) { "0" -> "QPSK"; "1" -> "8PSK"; "2" -> "16APSK"; "3" -> "32APSK"; else -> "8PSK" }
-                            tag.equals("FEC", true) -> fec = parser.nextText().trim().ifEmpty { "3/4" }
-                            tag.equals("Scramble", true) || tag.equals("Crypt", true) -> scramble = parser.nextText().trim() == "1"
-                            tag.equals("VideoPID", true) || tag.equals("VPID", true) -> vPid = parser.nextText().trim()
-                            tag.equals("AudioPID", true) || tag.equals("APID", true) -> aPid = parser.nextText().trim()
-                        }
-                    }
-                    XmlPullParser.END_TAG -> {
-                        if (tag.equals("Program", true) || tag.equals("Channel", true)) {
-                            if (rawName.isNotEmpty()) {
-                                parsed.add(DvbChannel(idx++, rawName, provider, serviceId, satName, freq, pol, sym, dvbSys, mod, fec, scramble, hd, vPid, aPid))
-                                rawName = ""; provider = ""; serviceId = ""; freq = ""; pol = ""; sym = ""
-                            }
-                        }
+                        updateStatus("Connected ($ip) - Raw: ${infoReply.take(60)}")
                     }
                 }
-                eventType = parser.next()
+            } catch (e: Exception) {
+                updateStatus("Connection error: ${e.localizedMessage ?: "Failed"}")
             }
-        } catch (_: Throwable) {}
-
-        scope.launch(Dispatchers.Main) {
-            allChannels.clear(); allChannels.addAll(parsed)
-            filteredChannels.clear(); filteredChannels.addAll(parsed)
-            adapter.notifyDataSetChanged()
-            tvStatus.text = "Connected ($currentIp) • Loaded ${parsed.size} channels ✓"
         }
     }
 
-    private fun showPlayerDialog(channel: DvbChannel) {
-        val options = arrayOf(
-            "Internal Player (H.265 / 4K) + Pro Info Bar",
-            "Open with VLC Player",
-            "Open with MX Player",
-            "Copy Full Ident"
-        )
+    private fun parseGmScreenChannels(data: String, startOffset: Int): List<DvbChannel> {
+        val list = mutableListOf<DvbChannel>()
+        try {
+            // Parse JSON objects returned by G-MScreen STB
+            val objRegex = Regex("\\{[^{}]*\"ServiceName\"[^{}]*\\}")
+            val matches = objRegex.findAll(data)
+            var idx = startOffset + 1
+
+            for (m in matches) {
+                val obj = m.value
+                fun getJsonVal(key: String): String {
+                    return Regex("\"$key\"\\s*:\\s*\"?([^\",}]+)\"?").find(obj)?.groupValues?.get(1)?.trim() ?: ""
+                }
+
+                val name = getJsonVal("ServiceName").ifEmpty { getJsonVal("ProgramName") }
+                if (name.isEmpty()) continue
+
+                val sid = getJsonVal("ServiceID").ifEmpty { getJsonVal("ProgramId").ifEmpty { "$idx" } }
+                val sat = getJsonVal("SatName").ifEmpty { "Sat" }
+                val freq = getJsonVal("Frequency").ifEmpty { getJsonVal("Freq") }
+                val pol = getJsonVal("Polarization").ifEmpty { getJsonVal("Pol") }
+                val sym = getJsonVal("SymbolRate").ifEmpty { getJsonVal("Sym") }
+                val vPid = getJsonVal("VideoPID").ifEmpty { getJsonVal("VPid").ifEmpty { "0" } }
+                val aPid = getJsonVal("AudioPID").ifEmpty { getJsonVal("APid").ifEmpty { "0" } }
+                val crypt = getJsonVal("Scramble") == "1" || getJsonVal("Crypt") == "1"
+                val hd = getJsonVal("HD") == "1" || name.contains("HD", ignoreCase = true)
+
+                list.add(
+                    DvbChannel(idx++, name, sat, sid, sat, freq, pol, sym, "DVB-S2", "8PSK", "3/4", crypt, hd, vPid, aPid)
+                )
+            }
+        } catch (_: Exception) {}
+        return list
+    }
+
+    private fun showPlayerDialog(ch: DvbChannel) {
+        // Official ALi / G-MScreen RTSP URL format
+        val polLower = if (ch.pol.lowercase().startsWith("v")) "v" else "h"
+        val streamUrl = if (ch.freq.isNotEmpty() && ch.vPid != "0") {
+            "rtsp://$currentIp:554/?alisatid=1&freq=${ch.freq}&pol=$polLower&msys=dvbs2&mtype=8psk&ro=0.35&plts=on&sr=${ch.symRate.ifEmpty { "27500" }}&fec=1&vpid=${ch.vPid}&apid=${ch.aPid}&pids=${ch.vPid},${ch.aPid}"
+        } else {
+            "http://$currentIp:8000/stream?sid=${ch.serviceId}"
+        }
+
+        val options = arrayOf("Play Inside App (VLC)", "Open in MX Player", "Open in VLC App", "Copy Stream URL")
         AlertDialog.Builder(this)
-            .setTitle(channel.rawIdent)
+            .setTitle(ch.rawIdent)
             .setItems(options) { _, which ->
-                if (which == 3) copyText(channel.rawIdent, "Copied: ${channel.rawIdent}")
-                else startStream(channel, which)
+                when (which) {
+                    0 -> playInsideApp(ch, streamUrl)
+                    1 -> openExternal(streamUrl, "com.mxtech.videoplayer.ad", ch.rawIdent)
+                    2 -> openExternal(streamUrl, "org.videolan.vlc", ch.rawIdent)
+                    3 -> copyText(streamUrl, "Stream URL Copied!")
+                }
             }
             .show()
     }
 
-    private fun startStream(channel: DvbChannel, mode: Int) {
-        updateStatus("Streaming: ${channel.rawIdent}...")
+    private fun playInsideApp(ch: DvbChannel, url: String) {
+        playerContainer.visibility = View.VISIBLE
         layoutInfoBar.visibility = View.VISIBLE
-        tvInfoChannelName.text = String.format(Locale.US, "%04d. %s", channel.index, channel.rawIdent)
-        tvBadgeRes.text = if (channel.isHd) "HD" else "SD"
-        tvBadgeCrypt.text = if (channel.isScrambled) "CRYPT $" else "FTA"
-        tvBadgeCrypt.setTextColor(if (channel.isScrambled) 0xFFEF4444.toInt() else 0xFF4ADE80.toInt())
+        tvInfoChannelName.text = ch.rawIdent
+        tvBadgeCrypt.text = if (ch.isScrambled) "CRYPT" else "FTA"
+        tvInfoSatFreq.text = "${ch.satName} • ${ch.freq} ${ch.pol}"
+        tvInfoPids.text = "V:${ch.vPid} A:${ch.aPid}"
 
-        val freqText = if (channel.freq.isNotEmpty()) "${channel.satName} • ${channel.freq} ${channel.pol} ${channel.symRate}" else channel.satName
-        tvInfoSatFreq.text = freqText
-        tvSatFinderFreq.text = freqText
-        tvInfoModulation.text = "${channel.dvbSystem} • ${channel.modulation} • ${channel.fec}"
-        tvInfoPids.text = "V:${channel.vPid} A:${channel.aPid}"
-
-        startTelemetryMonitor()
-
+        // Tell STB to switch to this channel (request 1009)
         scope.launch {
-            sendRawXml("<Command request=\"1010\"><ServiceID>${channel.serviceId}</ServiceID><ProgramIndex>${channel.index - 1}</ProgramIndex></Command>")
-            delay(500)
-            val streamUrl = "http://$currentIp:8080/live"
-            withContext(Dispatchers.Main) {
-                when (mode) {
-                    0 -> {
-                        if (libVlc != null && mediaPlayer != null) {
-                            try {
-                                playerContainer.visibility = View.VISIBLE
-                                val media = Media(libVlc, Uri.parse(streamUrl))
-                                media.setHWDecoderEnabled(true, false)
-                                mediaPlayer?.media = media
-                                media.release()
-                                mediaPlayer?.play()
-                            } catch (_: Throwable) {
-                                openExternal(streamUrl, "org.videolan.vlc", channel.rawIdent)
-                            }
-                        } else {
-                            Toast.makeText(this@MainActivity, "Opening external player...", Toast.LENGTH_SHORT).show()
-                            openExternal(streamUrl, "org.videolan.vlc", channel.rawIdent)
-                        }
-                    }
-                    1 -> openExternal(streamUrl, "org.videolan.vlc", channel.rawIdent)
-                    2 -> openExternal(streamUrl, "com.mxtech.videoplayer.ad", channel.rawIdent)
-                }
-            }
+            sendRawXml("{\"request\":\"1009\",\"TvState\":\"0\",\"ProgramId\":\"${ch.serviceId}\"}")
+        }
+
+        try {
+            mediaPlayer?.stop()
+            val media = Media(libVlc, Uri.parse(url))
+            mediaPlayer?.media = media
+            media.release()
+            mediaPlayer?.play()
+        } catch (e: Exception) {
+            updateStatus("Player Error: ${e.message}")
         }
     }
 
@@ -635,100 +646,4 @@ class MainActivity : AppCompatActivity() {
                 try {
                     val nowRx = TrafficStats.getTotalRxBytes()
                     val nowMs = System.currentTimeMillis()
-                    val diffSec = (nowMs - lastTimeMs) / 1000.0
-                    val mbps = if (diffSec > 0 && nowRx >= lastRxBytes) ((nowRx - lastRxBytes) * 8.0) / (diffSec * 1_000_000.0) else 0.0
-                    lastRxBytes = nowRx; lastTimeMs = nowMs
 
-                    sendRawXml("<Command request=\"1030\" />")
-                    delay(350)
-
-                    var strength = 85; var quality = 80
-                    val available = inputStream?.available() ?: 0
-                    if (available > 0) {
-                        val buffer = ByteArray(2048)
-                        val read = inputStream?.read(buffer) ?: 0
-                        val xml = String(buffer, 0, read, Charsets.UTF_8)
-                        strength = extractTagInt(xml, "SignalStrength") ?: extractTagInt(xml, "Strength") ?: 85
-                        quality = extractTagInt(xml, "SignalQuality") ?: extractTagInt(xml, "Quality") ?: 80
-                    }
-
-                    val dbStr = String.format(Locale.US, "%.1f dB", quality * 0.175)
-                    val bitrateStr = String.format(Locale.US, "Bitrate: %.2f Mbps • %s", mbps, videoResInfo)
-
-                    if (isBeepActive && quality > 30) {
-                        try { toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP, 80) } catch (_: Throwable) {}
-                    }
-
-                    withContext(Dispatchers.Main) {
-                        pbStrength.progress = strength; tvStrengthVal.text = "$strength%"
-                        pbQuality.progress = quality; tvQualityVal.text = "$quality%"
-                        tvInfoDb.text = dbStr; tvInfoBitrate.text = bitrateStr
-                        tvSatFinderDb.text = dbStr; pbSatSignal.progress = strength; pbSatQuality.progress = quality
-
-                        val qColor = when {
-                            quality >= 70 -> 0xFF22C55E.toInt()
-                            quality >= 45 -> 0xFFEAB308.toInt()
-                            else -> 0xFFEF4444.toInt()
-                        }
-                        pbQuality.progressTintList = ColorStateList.valueOf(qColor)
-                        tvQualityVal.setTextColor(qColor); tvInfoDb.setTextColor(qColor); tvSatFinderDb.setTextColor(qColor)
-                    }
-                } catch (_: Throwable) {}
-                delay(1200)
-            }
-        }
-    }
-
-    private fun extractTagInt(xml: String, tag: String): Int? =
-        Regex("<$tag>(\\d+)</$tag>", RegexOption.IGNORE_CASE).find(xml)?.groupValues?.get(1)?.toIntOrNull()
-
-    private fun openExternal(url: String, pkg: String, title: String) {
-        try {
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(Uri.parse(url), "video/*")
-                setPackage(pkg)
-                putExtra("title", title)
-            }
-            startActivity(intent)
-        } catch (e: Exception) {
-            val fallback = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(Uri.parse(url), "video/*")
-                putExtra("title", title)
-            }
-            startActivity(Intent.createChooser(fallback, "Select Video Player"))
-        }
-    }
-
-        private fun sendRawXml(xml: String) {
-        try {
-            val out = outputStream ?: return
-            val fullXml = if (xml.startsWith("<?xml")) {
-                xml
-            } else {
-                "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>$xml"
-            }
-            val payload = fullXml.toByteArray(Charsets.UTF_8)
-
-            if (tcpSocket?.port == 20000) {
-                val buf = java.nio.ByteBuffer.allocate(16 + payload.size)
-                buf.order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                buf.put("GCDH".toByteArray(Charsets.US_ASCII))
-                buf.putInt(payload.size)
-                buf.putInt(0)
-                buf.putInt(0)
-                buf.put(payload)
-                out.write(buf.array())
-            } else {
-                out.write(payload)
-                out.write("\n".toByteArray(Charsets.UTF_8))
-            }
-            out.flush()
-        } catch (_: Throwable) {}
-    }
-        
-    private fun updateStatus(msg: String) {
-        runOnUiThread {
-            tvStatus.text = msg
-        }
-    }
-}
