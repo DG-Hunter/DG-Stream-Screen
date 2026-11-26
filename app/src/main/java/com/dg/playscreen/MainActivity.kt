@@ -39,6 +39,7 @@ import java.net.InetAddress
 import java.net.Socket
 import java.util.Collections
 import java.util.Locale
+import java.net.InetSocketAddress
 
 data class DvbChannel(
     var index: Int,
@@ -647,3 +648,108 @@ class MainActivity : AppCompatActivity() {
                     val nowRx = TrafficStats.getTotalRxBytes()
                     val nowMs = System.currentTimeMillis()
 
+                    val diffSec = (nowMs - lastTimeMs) / 1000.0
+                    val mbps = if (diffSec > 0 && nowRx >= lastRxBytes) ((nowRx - lastRxBytes) * 8.0) / (diffSec * 1_000_000.0) else 0.0
+                    lastRxBytes = nowRx; lastTimeMs = nowMs
+
+                    // Request real signal strength/quality from STB (request 403)
+                    sendRawXml("{\"request\":\"403\"}")
+                    delay(350)
+
+                    var strength = 0
+                    var quality = 0
+                    val inStr = inputStream
+                    if (inStr != null && inStr.available() > 0) {
+                        val reply = readGmScreenResponse(inStr)
+                        strength = Regex("\"Strength\"\\s*:\\s*\"?(\\d+)\"?", RegexOption.IGNORE_CASE).find(reply)?.groupValues?.get(1)?.toIntOrNull()
+                            ?: extractTagInt(reply, "SignalStrength") ?: 0
+                        quality = Regex("\"Quality\"\\s*:\\s*\"?(\\d+)\"?", RegexOption.IGNORE_CASE).find(reply)?.groupValues?.get(1)?.toIntOrNull()
+                            ?: extractTagInt(reply, "SignalQuality") ?: 0
+                    }
+
+                    val dbStr = String.format(Locale.US, "%.1f dB", quality * 0.175)
+                    val bitrateStr = String.format(Locale.US, "Bitrate: %.2f Mbps • %s", mbps, videoResInfo)
+
+                    if (isBeepActive && quality > 30) {
+                        try { toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP, 80) } catch (_: Throwable) {}
+                    }
+
+                    withContext(Dispatchers.Main) {
+                        pbStrength.progress = strength; tvStrengthVal.text = "$strength%"
+                        pbQuality.progress = quality; tvQualityVal.text = "$quality%"
+                        tvInfoDb.text = dbStr; tvInfoBitrate.text = bitrateStr
+                        tvSatFinderDb.text = dbStr; pbSatSignal.progress = strength; pbSatQuality.progress = quality
+
+                        val qColor = when {
+                            quality >= 70 -> 0xFF22C55E.toInt()
+                            quality >= 45 -> 0xFFEAB308.toInt()
+                            else -> 0xFFEF4444.toInt()
+                        }
+                        pbQuality.progressTintList = ColorStateList.valueOf(qColor)
+                        tvQualityVal.setTextColor(qColor); tvInfoDb.setTextColor(qColor); tvSatFinderDb.setTextColor(qColor)
+                    }
+                } catch (_: Throwable) {}
+                delay(1200)
+            }
+        }
+    }
+
+    private fun extractTagInt(xml: String, tag: String): Int? =
+        Regex("<$tag>(\\d+)</$tag>", RegexOption.IGNORE_CASE).find(xml)?.groupValues?.get(1)?.toIntOrNull()
+
+    private fun openExternal(url: String, pkg: String, title: String) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(Uri.parse(url), "video/*")
+                setPackage(pkg)
+                putExtra("title", title)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            val fallback = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(Uri.parse(url), "video/*")
+                putExtra("title", title)
+            }
+            startActivity(Intent.createChooser(fallback, "Select Video Player"))
+        }
+    }
+
+    private fun copyText(text: String, toastMsg: String) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("DGPlay", text))
+        Toast.makeText(this, toastMsg, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun sendRawXml(cmd: String) {
+        try {
+            val out = outputStream ?: return
+            val finalCmd = if (cmd.contains("request=\"1040\"")) {
+                val key = Regex("<key>(\\d+)</key>").find(cmd)?.groupValues?.get(1) ?: "1"
+                "{\"request\":\"1040\",\"array\":[{\"KeyValue\":\"$key\"}]}"
+            } else {
+                cmd
+            }
+            out.write(wrapGmScreenPacket(finalCmd))
+            out.flush()
+        } catch (_: Throwable) {}
+    }
+
+    private fun updateStatus(msg: String) {
+        runOnUiThread {
+            tvStatus.text = msg
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        monitorJob?.cancel()
+        scope.cancel()
+        try {
+            tcpSocket?.close()
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+            libVlc?.release()
+            toneGenerator?.release()
+        } catch (_: Throwable) {}
+    }
+}
