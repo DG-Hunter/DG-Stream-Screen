@@ -519,7 +519,7 @@ class MainActivity : AppCompatActivity() {
                         val strCheck = String(currentData, 0, minOf(currentData.size, 128), Charsets.ISO_8859_1)
                         val match = Regex("Start(\\d{7})End").find(strCheck)
                         if (match != null) {
-                            expectedPayloadSize = match.groupValues.toIntOrNull() ?: -1
+                            expectedPayloadSize = match.groupValues[1].toIntOrNull() ?: -1
                             headerEndOffset = match.range.last + 1
                         }
                     }
@@ -577,7 +577,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun connectAndFetchChannels(rawIp: String) {
         val parts = rawIp.trim().split(":")
-        val ip = parts
+        val ip = parts[0]
         val port = parts.getOrNull(1)?.toIntOrNull() ?: 20000
         currentIp = ip
         updateStatus("Connecting to $ip:$port...")
