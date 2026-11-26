@@ -103,15 +103,25 @@ class MainActivity : Activity() {
     @Volatile
     private var satfinderRunning = false
 
-    override fun onCreate(savedInstanceState: Bundle?) {
+        override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-
-        bindViews()
-        setupTabs()
-        setupChannelControls()
-        setupRemoteButtons()
-        setupConnectionButtons()
+        try {
+            setContentView(R.layout.activity_main)
+            bindViews()
+            setupTabs()
+            setupChannelControls()
+            setupRemoteButtons()
+            setupConnectionButtons()
+        } catch (e: Throwable) {
+            val tvError = TextView(this)
+            tvError.setTextColor(Color.WHITE)
+            tvError.setBackgroundColor(Color.BLACK)
+            tvError.setPadding(24, 24, 24, 24)
+            tvError.text = "Startup Error:\n${e.javaClass.name}\n${e.message}\n\n${android.util.Log.getStackTraceString(e)}"
+            val scroll = ScrollView(this)
+            scroll.addView(tvError)
+            setContentView(scroll)
+        }
     }
 
     private fun bindViews() {
