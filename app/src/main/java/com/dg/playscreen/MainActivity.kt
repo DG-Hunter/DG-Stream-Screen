@@ -714,11 +714,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun copyText(text: String, toastMsg: String) {
-        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("DGPlay", text))
-        Toast.makeText(this, toastMsg, Toast.LENGTH_SHORT).show()
-    }
 
     private fun sendRawXml(cmd: String) {
         try {
