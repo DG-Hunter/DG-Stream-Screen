@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:background="#131926"
+    android:gravity="center_vertical"
+    android:padding="10dp"
+    android:layout_marginBottom="4dp">
+
+    <TextView
+        android:id="@+id/tvChNum"
+        android:layout_width="46dp"
+        android:layout_height="wrap_content"
+        android:text="0001"
+        android:textColor="#38BDF8"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:gravity="center"/>
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_weight="1"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:layout_marginLeft="8dp"
+        android:layout_marginRight="6dp">
+
+        <TextView
+            android:id="@+id/tvChIdent"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Channel Name"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:singleLine="true"/>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginTop="3dp">
+
+            <TextView
+                android:id="@+id/tvBadgeCryptIcon"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="💲"
+                android:textSize="11sp"
+                android:layout_marginRight="4dp"
+                android:visibility="gone"/>
+
+            <TextView
+                android:id="@+id/tvBadgeFavIcon"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="❤️"
+                android:textSize="11sp"
+                android:layout_marginRight="4dp"
+                android:visibility="gone"/>
+
+            <TextView
+                android:id="@+id/tvBadgeLockIcon"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="🔒"
+                android:textSize="11sp"
+                android:layout_marginRight="6dp"
+                android:visibility="gone"/>
+
+            <TextView
+                android:id="@+id/tvChMeta"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:text="Nilesat • 11680 H 27500"
+                android:textColor="#94A3B8"
+                android:textSize="11sp"
+                android:singleLine="true"/>
+        </LinearLayout>
+    </LinearLayout>
+
+    <Button
+        android:id="@+id/btnChannelOptions"
+        android:layout_width="42dp"
+        android:layout_height="36dp"
+        android:text="•••"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:background="#1E293B"
+        android:textColor="#38BDF8"/>
+</LinearLayout>
