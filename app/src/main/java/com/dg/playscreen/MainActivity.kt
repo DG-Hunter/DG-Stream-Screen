@@ -123,6 +123,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvSatFinderDb: TextView
     private lateinit var pbSatSignal: ProgressBar
     private lateinit var pbSatQuality: ProgressBar
+    private lateinit var tvSatFinderSatName: TextView
+    private lateinit var tvSatStrengthVal: TextView
+    private lateinit var tvSatQualityVal: TextView
+
     private var isBeepActive = false
     private var toneGenerator: ToneGenerator? = null
 
@@ -174,6 +178,10 @@ class MainActivity : AppCompatActivity() {
         tvInfoBitrate = findViewById(R.id.tvInfoBitrate)
         tvInfoPids = findViewById(R.id.tvInfoPids)
         pbStrength = findViewById(R.id.pbStrength)
+        tvSatFinderSatName = findViewById(R.id.tvSatFinderSatName)
+        tvSatStrengthVal = findViewById(R.id.tvSatStrengthVal)
+        tvSatQualityVal = findViewById(R.id.tvSatQualityVal)
+
         tvStrengthVal = findViewById(R.id.tvStrengthVal)
         pbQuality = findViewById(R.id.pbQuality)
         tvQualityVal = findViewById(R.id.tvQualityVal)
@@ -722,7 +730,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun startTelemetryMonitor() {
+        private fun startTelemetryMonitor() {
         monitorJob?.cancel()
         monitorJob = scope.launch {
             var lastRxBytes = TrafficStats.getTotalRxBytes()
@@ -736,13 +744,34 @@ class MainActivity : AppCompatActivity() {
                     val mbps = if (diffSec > 0 && nowRx >= lastRxBytes) ((nowRx - lastRxBytes) * 8.0) / (diffSec * 1_000_000.0) else 0.0
                     lastRxBytes = nowRx; lastTimeMs = nowMs
 
-                    // Request real signal strength/quality from STB (request 403)
+                    // 1. Request current playing channel & transponder info (request 1001)
+                    sendRawXml("{\"request\":\"1001\"}")
+                    delay(250)
+                    var activeSat = ""
+                    var activeFreqInfo = ""
+                    val inStr = inputStream
+                    if (inStr != null && inStr.available() > 0) {
+                        val infoReply = readGmScreenResponse(inStr)
+                        val chName = Regex("\"(ServiceName|ProgramName)\"\\s*:\\s*\"([^\"]+)\"").find(infoReply)?.groupValues?.get(2) ?: ""
+                        val satName = Regex("\"SatName\"\\s*:\\s*\"([^\"]+)\"").find(infoReply)?.groupValues?.get(1) ?: ""
+                        val freq = Regex("\"(Frequency|Freq)\"\\s*:\\s*\"?(\\d+)\"?").find(infoReply)?.groupValues?.get(2) ?: ""
+                        val pol = Regex("\"(Polarization|Pol)\"\\s*:\\s*\"?([^\"]+)\"?").find(infoReply)?.groupValues?.get(2) ?: ""
+                        val sym = Regex("\"(SymbolRate|Sym)\"\\s*:\\s*\"?(\\d+)\"?").find(infoReply)?.groupValues?.get(2) ?: ""
+
+                        if (satName.isNotEmpty() || chName.isNotEmpty()) {
+                            activeSat = "Satellite: ${satName.ifEmpty { "Active Tuner" }} (${chName.ifEmpty { "Live" }})"
+                        }
+                        if (freq.isNotEmpty()) {
+                            activeFreqInfo = "TP: $freq MHz • $pol • SR $sym"
+                        }
+                    }
+
+                    // 2. Request real signal strength & quality (request 403)
                     sendRawXml("{\"request\":\"403\"}")
-                    delay(350)
+                    delay(300)
 
                     var strength = 0
                     var quality = 0
-                    val inStr = inputStream
                     if (inStr != null && inStr.available() > 0) {
                         val reply = readGmScreenResponse(inStr)
                         strength = Regex("\"Strength\"\\s*:\\s*\"?(\\d+)\"?", RegexOption.IGNORE_CASE).find(reply)?.groupValues?.get(1)?.toIntOrNull()
@@ -762,21 +791,34 @@ class MainActivity : AppCompatActivity() {
                         pbStrength.progress = strength; tvStrengthVal.text = "$strength%"
                         pbQuality.progress = quality; tvQualityVal.text = "$quality%"
                         tvInfoDb.text = dbStr; tvInfoBitrate.text = bitrateStr
-                        tvSatFinderDb.text = dbStr; pbSatSignal.progress = strength; pbSatQuality.progress = quality
 
-                        val qColor = when {
-                            quality >= 70 -> 0xFF22C55E.toInt()
-                            quality >= 45 -> 0xFFEAB308.toInt()
+                        // SatFinder Pro UI Updates
+                        if (activeSat.isNotEmpty()) tvSatFinderSatName.text = activeSat
+                        if (activeFreqInfo.isNotEmpty()) tvSatFinderFreq.text = activeFreqInfo
+                        tvSatFinderDb.text = dbStr
+
+                        pbSatSignal.progress = strength
+                        pbSatSignal.progressTintList = ColorStateList.valueOf(0xFFEF4444.toInt()) // Red
+                        tvSatStrengthVal.text = "$strength%"
+
+                        pbSatQuality.progress = quality
+                        pbSatQuality.progressTintList = ColorStateList.valueOf(0xFF22C55E.toInt()) // Green
+                        tvSatQualityVal.text = "$quality%"
+
+                        val dbColor = when {
+                            quality >= 65 -> 0xFF22C55E.toInt()
+                            quality >= 40 -> 0xFFEAB308.toInt()
                             else -> 0xFFEF4444.toInt()
                         }
-                        pbQuality.progressTintList = ColorStateList.valueOf(qColor)
-                        tvQualityVal.setTextColor(qColor); tvInfoDb.setTextColor(qColor); tvSatFinderDb.setTextColor(qColor)
+                        tvSatFinderDb.setTextColor(dbColor)
+                        tvInfoDb.setTextColor(dbColor)
                     }
                 } catch (_: Throwable) {}
-                delay(1200)
+                delay(1000)
             }
         }
     }
+
 
     private fun extractTagInt(xml: String, tag: String): Int? =
         Regex("<$tag>(\\d+)</$tag>", RegexOption.IGNORE_CASE).find(xml)?.groupValues?.get(1)?.toIntOrNull()
