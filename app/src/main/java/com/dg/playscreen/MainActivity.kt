@@ -432,29 +432,47 @@ class MainActivity : AppCompatActivity() {
         return header + payloadBytes
     }
 
+
+    
     private fun readGmScreenResponse(inStream: InputStream): String {
         val allBytes = java.io.ByteArrayOutputStream()
-        val buf = ByteArray(8192)
-        var emptyReads = 0
+        val buf = ByteArray(16384)
+        var expectedPayloadSize = -1
+        var headerEndOffset = -1
+        var idleAttempts = 0
 
-        while (emptyReads < 4) {
+        while (idleAttempts < 15) {
             try {
-                val r = inStream.read(buf)
-                if (r <= 0) break
-                // Skip 16-byte GCDH ack header if present at start
-                var offset = 0
-                if (r >= 16 && buf[0] == 'G'.code.toByte() && buf[1] == 'C'.code.toByte() && buf[2] == 'D'.code.toByte() && buf[3] == 'H'.code.toByte()) {
-                    offset = 16
-                }
-                if (r > offset) {
-                    allBytes.write(buf, offset, r - offset)
-                }
-                if (inStream.available() == 0) {
-                    Thread.sleep(200)
-                    if (inStream.available() == 0) break
+                if (inStream.available() > 0) {
+                    val r = inStream.read(buf)
+                    if (r <= 0) break
+                    allBytes.write(buf, 0, r)
+                    idleAttempts = 0
+
+                    val currentData = allBytes.toByteArray()
+                    if (expectedPayloadSize == -1) {
+                        val strCheck = String(currentData, 0, minOf(currentData.size, 64), Charsets.ISO_8859_1)
+                        val match = Regex("Start(\\d{7})End").find(strCheck)
+                        if (match != null) {
+                            expectedPayloadSize = match.groupValues[1].toIntOrNull() ?: -1
+                            headerEndOffset = match.range.last + 1
+                        }
+                    }
+
+                    if (expectedPayloadSize > 0 && headerEndOffset > 0) {
+                        if (currentData.size >= headerEndOffset + expectedPayloadSize) {
+                            break
+                        }
+                    }
+                } else {
+                    if (expectedPayloadSize == -1 && allBytes.size() > 0) {
+                        val strCheck = String(allBytes.toByteArray(), Charsets.ISO_8859_1)
+                        if (!strCheck.contains("Start") && allBytes.size() > 20) break
+                    }
+                    Thread.sleep(100)
+                    idleAttempts++
                 }
             } catch (_: Exception) {
-                emptyReads++
                 break
             }
         }
@@ -462,17 +480,21 @@ class MainActivity : AppCompatActivity() {
         val raw = allBytes.toByteArray()
         if (raw.isEmpty()) return ""
 
-        // Check if response is Zlib compressed (0x78 0x9C or 0x78 0xDA)
-        for (i in 0 until raw.size - 1) {
+        val startIndex = if (headerEndOffset > 0) headerEndOffset else 0
+
+        // Decompress Zlib stream starting from exact payload offset
+        for (i in startIndex until raw.size - 1) {
             if (raw[i] == 0x78.toByte() && (raw[i + 1] == 0x9C.toByte() || raw[i + 1] == 0xDA.toByte() || raw[i + 1] == 0x01.toByte())) {
                 try {
                     val inflater = java.util.zip.Inflater()
                     inflater.setInput(raw, i, raw.size - i)
                     val out = java.io.ByteArrayOutputStream()
-                    val tmp = ByteArray(4096)
+                    val tmp = ByteArray(8192)
                     while (!inflater.finished()) {
                         val count = inflater.inflate(tmp)
-                        if (count == 0) break
+                        if (count == 0) {
+                            if (inflater.needsInput()) break
+                        }
                         out.write(tmp, 0, count)
                     }
                     inflater.end()
@@ -481,7 +503,7 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: Exception) {}
             }
         }
-        return String(raw, Charsets.UTF_8)
+        return if (startIndex < raw.size) String(raw, startIndex, raw.size - startIndex, Charsets.UTF_8) else String(raw, Charsets.UTF_8)
     }
 
     private fun connectAndFetchChannels(rawIp: String) {
@@ -496,71 +518,89 @@ class MainActivity : AppCompatActivity() {
                 tcpSocket?.close()
                 val s = Socket()
                 s.connect(InetSocketAddress(ip, port), 4000)
-                s.soTimeout = 3000
+                s.soTimeout = 4000
                 tcpSocket = s
                 outputStream = s.getOutputStream()
                 inputStream = s.getInputStream()
 
-                updateStatus("Handshaking with receiver ($ip)...")
+                val out = outputStream!!
+                val inStr = inputStream!!
 
-                // 1. Official G-MScreen Login Handshake (request 998)
-                outputStream?.write(wrapGmScreenPacket("<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><Command request=\"998\" />"))
-                outputStream?.flush()
-                delay(250)
-                readGmScreenResponse(inputStream!!)
+                // 1. Handshake & Device Info (Request 15 or Handshake)
+                out.write(wrapGmScreenPacket("{\"request\":\"15\"}"))
+                out.flush()
+                val handshakeReply = readGmScreenResponse(inStr)
+                val deviceName = Regex("\"ProductName\"\\s*:\\s*\"([^\"]+)\"").find(handshakeReply)?.groupValues?.get(1) ?: "ALi STB"
+                updateStatus("Connected ($deviceName) - Fetching Satellites & Channels...")
 
-                // 2. Get STB Info & Total Channel Count (request 15)
-                outputStream?.write(wrapGmScreenPacket("{\"request\":\"15\"}"))
-                outputStream?.flush()
-                delay(250)
-                val infoReply = readGmScreenResponse(inputStream!!)
-                val totalChannels = Regex("\"ChannelNum\"\\s*:\\s*(\\d+)").find(infoReply)?.groupValues?.get(1)?.toIntOrNull() ?: 300
-                val maxFetch = minOf(totalChannels, 1000)
+                // 2. Fetch Satellites Map (Request 22)
+                val satMap = mutableMapOf<String, String>()
+                out.write(wrapGmScreenPacket("{\"request\":\"22\"}"))
+                out.flush()
+                val satReply = readGmScreenResponse(inStr)
+                val satRegex = Regex("\\{[^{}]*\"SatName\"[^{}]*\\}")
+                for (m in satRegex.findAll(satReply)) {
+                    val sObj = m.value
+                    val sIdx = Regex("\"SatIndex\"\\s*:\\s*\"?([^\",}]+)\"?").find(sObj)?.groupValues?.get(1)?.trim() ?: ""
+                    val sName = Regex("\"SatName\"\\s*:\\s*\"([^\"]+)\"").find(sObj)?.groupValues?.get(1)?.trim() ?: ""
+                    if (sIdx.isNotEmpty() && sName.isNotEmpty()) {
+                        satMap[sIdx] = sName
+                    }
+                }
 
-                updateStatus("Fetching channels (0 to $maxFetch)...")
+                // 3. Fetch Channels in Chunks (Request 0 with FromIndex & ToIndex)
+                val fetchedList = mutableListOf<DvbChannel>()
+                var fromIndex = 0
+                val step = 100
+                var hasMore = true
+                var lastRawDebug = ""
 
-                // 3. Fetch Channels in batches of 100 (Official G-MScreen method)
-                val fetchedChannels = mutableListOf<DvbChannel>()
-                var startIdx = 0
-                while (startIdx < maxFetch) {
-                    val endIdx = minOf(startIdx + 99, maxFetch - 1)
-                    val reqJson = "{\"request\":\"0\",\"FromIndex\":\"$startIdx\",\"ToIndex\":\"$endIdx\"}"
-                    outputStream?.write(wrapGmScreenPacket(reqJson))
-                    outputStream?.flush()
-                    delay(300)
+                while (hasMore && fromIndex < 5000) {
+                    val cmd = "{\"request\":\"0\",\"FromIndex\":\"$fromIndex\",\"ToIndex\":\"${fromIndex + step - 1}\"}"
+                    out.write(wrapGmScreenPacket(cmd))
+                    out.flush()
 
-                    val batchReply = readGmScreenResponse(inputStream!!)
-                    if (batchReply.isEmpty()) break
+                    val chReply = readGmScreenResponse(inStr)
+                    if (chReply.isEmpty()) break
+                    lastRawDebug = chReply
 
-                    val batchList = parseGmScreenChannels(batchReply, fetchedChannels.size)
-                    if (batchList.isEmpty()) break
-                    fetchedChannels.addAll(batchList)
-                    startIdx += 100
+                    val batch = parseGmScreenChannels(chReply, fetchedList.size, satMap)
+                    if (batch.isEmpty()) {
+                        hasMore = false
+                    } else {
+                        fetchedList.addAll(batch)
+                        updateStatus("Loaded ${fetchedList.size} channels from $deviceName...")
+                        if (batch.size < step) {
+                            hasMore = false
+                        } else {
+                            fromIndex += step
+                        }
+                    }
                 }
 
                 withContext(Dispatchers.Main) {
                     allChannels.clear()
-                    allChannels.addAll(fetchedChannels)
+                    allChannels.addAll(fetchedList)
                     filteredChannels.clear()
-                    filteredChannels.addAll(fetchedChannels)
+                    filteredChannels.addAll(fetchedList)
                     adapter.notifyDataSetChanged()
-                    if (fetchedChannels.isNotEmpty()) {
-                        updateStatus("Connected! Loaded ${fetchedChannels.size} channels from $ip")
+
+                    if (fetchedList.isNotEmpty()) {
+                        updateStatus("Ready: ${fetchedList.size} Channels • ${satMap.size} Satellites ($deviceName)")
                     } else {
-                        updateStatus("Connected ($ip) - Raw: ${infoReply.take(60)}")
+                        updateStatus("Connected ($deviceName) - 0 Channels. Raw: ${lastRawDebug.take(140)}")
                     }
                 }
             } catch (e: Exception) {
-                updateStatus("Connection error: ${e.localizedMessage ?: "Failed"}")
+                updateStatus("Connection Error: ${e.message}")
             }
         }
     }
 
-    private fun parseGmScreenChannels(data: String, startOffset: Int): List<DvbChannel> {
+    private fun parseGmScreenChannels(data: String, startOffset: Int, satMap: Map<String, String> = emptyMap()): List<DvbChannel> {
         val list = mutableListOf<DvbChannel>()
         try {
-            // Parse JSON objects returned by G-MScreen STB
-            val objRegex = Regex("\\{[^{}]*\"ServiceName\"[^{}]*\\}")
+            val objRegex = Regex("\\{[^{}]*\"(ServiceName|ProgramName)\"[^{}]*\\}")
             val matches = objRegex.findAll(data)
             var idx = startOffset + 1
 
@@ -574,7 +614,8 @@ class MainActivity : AppCompatActivity() {
                 if (name.isEmpty()) continue
 
                 val sid = getJsonVal("ServiceID").ifEmpty { getJsonVal("ProgramId").ifEmpty { "$idx" } }
-                val sat = getJsonVal("SatName").ifEmpty { "Sat" }
+                val satIdx = getJsonVal("SatIndex")
+                val sat = getJsonVal("SatName").ifEmpty { satMap[satIdx] ?: if (satIdx.isNotEmpty()) "Sat #$satIdx" else "Satellite" }
                 val freq = getJsonVal("Frequency").ifEmpty { getJsonVal("Freq") }
                 val pol = getJsonVal("Polarization").ifEmpty { getJsonVal("Pol") }
                 val sym = getJsonVal("SymbolRate").ifEmpty { getJsonVal("Sym") }
@@ -590,6 +631,7 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {}
         return list
     }
+
 
     private fun showPlayerDialog(ch: DvbChannel) {
         // Official ALi / G-MScreen RTSP URL format
