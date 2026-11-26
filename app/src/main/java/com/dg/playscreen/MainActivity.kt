@@ -482,3 +482,196 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
+    private fun wrapGmScreenPacket(payloadStr: String): ByteArray {
+        val payloadBytes = payloadStr.toByteArray(Charsets.UTF_8)
+        val header = String.format(Locale.US, "Start%07dEnd", payloadBytes.size).toByteArray(Charsets.US_ASCII)
+        return header + payloadBytes
+    }
+
+    private fun drainSocketBuffer(inStr: InputStream) {
+        try {
+            val dump = ByteArray(8192)
+            while (inStr.available() > 0) {
+                inStr.read(dump)
+                Thread.sleep(30)
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun readGmScreenResponse(inStream: InputStream): String {
+        val allBytes = java.io.ByteArrayOutputStream()
+        val buf = ByteArray(16384)
+        var expectedPayloadSize = -1
+        var headerEndOffset = -1
+        var idleAttempts = 0
+
+        while (idleAttempts < 40) {
+            try {
+                if (inStream.available() > 0) {
+                    val r = inStream.read(buf)
+                    if (r <= 0) break
+                    allBytes.write(buf, 0, r)
+                    idleAttempts = 0
+
+                    val currentData = allBytes.toByteArray()
+                    if (expectedPayloadSize == -1) {
+                        val strCheck = String(currentData, 0, minOf(currentData.size, 128), Charsets.ISO_8859_1)
+                        val match = Regex("Start(\\d{7})End").find(strCheck)
+                        if (match != null) {
+                            expectedPayloadSize = match.groupValues.toIntOrNull() ?: -1
+                            headerEndOffset = match.range.last + 1
+                        }
+                    }
+
+                    if (expectedPayloadSize > 0 && headerEndOffset > 0) {
+                        if (currentData.size >= headerEndOffset + expectedPayloadSize) {
+                            break
+                        }
+                    }
+                } else {
+                    if (expectedPayloadSize == -1 && allBytes.size() > 32) {
+                        val strCheck = String(allBytes.toByteArray(), Charsets.ISO_8859_1)
+                        if (!strCheck.contains("Start")) break
+                    }
+                    Thread.sleep(100)
+                    idleAttempts++
+                }
+            } catch (_: Exception) {
+                break
+            }
+        }
+
+        val raw = allBytes.toByteArray()
+        if (raw.isEmpty()) return ""
+
+        val searchStart = if (headerEndOffset > 0) headerEndOffset else 0
+
+        for (i in searchStart until raw.size - 1) {
+            if (raw[i] == 0x78.toByte() && (
+                        raw[i + 1] == 0x9C.toByte() ||
+                        raw[i + 1] == 0xDA.toByte() ||
+                        raw[i + 1] == 0x01.toByte() ||
+                        raw[i + 1] == 0x5E.toByte()
+                        )) {
+                try {
+                    val inflater = java.util.zip.Inflater()
+                    inflater.setInput(raw, i, raw.size - i)
+                    val out = java.io.ByteArrayOutputStream()
+                    val tmp = ByteArray(8192)
+                    while (!inflater.finished()) {
+                        val count = inflater.inflate(tmp)
+                        if (count == 0) {
+                            if (inflater.needsInput()) break
+                        }
+                        out.write(tmp, 0, count)
+                    }
+                    inflater.end()
+                    val unzipped = out.toString("UTF-8")
+                    if (unzipped.isNotEmpty()) return unzipped
+                } catch (_: Exception) {}
+            }
+        }
+        return if (searchStart < raw.size) String(raw, searchStart, raw.size - searchStart, Charsets.UTF_8) else String(raw, Charsets.UTF_8)
+    }
+
+    private fun connectAndFetchChannels(rawIp: String) {
+        val parts = rawIp.trim().split(":")
+        val ip = parts
+        val port = parts.getOrNull(1)?.toIntOrNull() ?: 20000
+        currentIp = ip
+        updateStatus("Connecting to $ip:$port...")
+
+        scope.launch {
+            try {
+                tcpSocket?.close()
+                val s = Socket()
+                s.connect(InetSocketAddress(ip, port), 5000)
+                s.soTimeout = 5000
+                tcpSocket = s
+                outputStream = s.getOutputStream()
+                inputStream = s.getInputStream()
+
+                val out = outputStream!!
+                val inStr = inputStream!!
+
+                out.write(wrapGmScreenPacket("{\"request\":\"998\",\"ClientType\":\"0\",\"MobileType\":\"Android\",\"AppVersion\":\"1.0\"}"))
+                out.flush()
+                delay(300)
+                drainSocketBuffer(inStr)
+
+                out.write(wrapGmScreenPacket("{\"request\":\"15\"}"))
+                out.flush()
+                val handshakeReply = readGmScreenResponse(inStr)
+                drainSocketBuffer(inStr)
+                val deviceName = Regex("\"ProductName\"\\s*:\\s*\"([^\"]+)\"").find(handshakeReply)?.groupValues?.get(1) ?: "ALi STB"
+                updateStatus("Connected ($deviceName) • Fetching Satellites...")
+
+                val satMap = mutableMapOf<String, String>()
+                out.write(wrapGmScreenPacket("{\"request\":\"22\"}"))
+                out.flush()
+                delay(400)
+                val satReply = readGmScreenResponse(inStr)
+                drainSocketBuffer(inStr)
+
+                val satRegex = Regex("\\{[^{}]*\"SatName\"[^{}]*\\}")
+                for (m in satRegex.findAll(satReply)) {
+                    val sObj = m.value
+                    val sIdx = Regex("\"SatIndex\"\\s*:\\s*\"?([^\",}]+)\"?").find(sObj)?.groupValues?.get(1)?.trim() ?: ""
+                    val sName = Regex("\"SatName\"\\s*:\\s*\"([^\"]+)\"").find(sObj)?.groupValues?.get(1)?.trim() ?: ""
+                    if (sIdx.isNotEmpty() && sName.isNotEmpty()) {
+                        satMap[sIdx] = sName
+                    }
+                }
+                discoveredSatellites.clear()
+                discoveredSatellites.addAll(satMap.values.distinct().sorted())
+                updateStatus("Found ${satMap.size} Satellites • Loading Channels...")
+
+                val fetchedList = mutableListOf<DvbChannel>()
+                var fromIndex = 0
+                val step = 100
+                var hasMore = true
+                var lastRawDebug = ""
+                val tvStateVal = if (isRadioMode) 1 else 0
+
+                while (hasMore && fromIndex < 6000) {
+                    drainSocketBuffer(inStr)
+                    val cmd = "{\"request\":\"0\",\"TvState\":$tvStateVal,\"FromIndex\":$fromIndex,\"ToIndex\":${fromIndex + step - 1}}"
+                    out.write(wrapGmScreenPacket(cmd))
+                    out.flush()
+                    delay(350)
+
+                    val chReply = readGmScreenResponse(inStr)
+                    if (chReply.isEmpty()) break
+                    lastRawDebug = chReply
+
+                    val batch = parseGmScreenChannels(chReply, fetchedList.size, satMap)
+                    if (batch.isEmpty()) {
+                        hasMore = false
+                    } else {
+                        fetchedList.addAll(batch)
+                        updateStatus("Loaded ${fetchedList.size} Channels ($deviceName)...")
+                        if (batch.size < step) {
+                            hasMore = false
+                        } else {
+                            fromIndex += step
+                        }
+                    }
+                }
+
+                withContext(Dispatchers.Main) {
+                    allChannels.clear()
+                    allChannels.addAll(fetchedList)
+                    applyChannelFilters(findViewById<EditText>(R.id.etSearchChannel).text.toString())
+
+                    if (fetchedList.isNotEmpty()) {
+                        updateStatus("Ready: ${fetchedList.size} Channels • ${satMap.size} Satellites ($deviceName)")
+                    } else {
+                        updateStatus("Connected ($deviceName) • ${satMap.size} Sats • 0 Ch. Raw: ${lastRawDebug.take(140)}")
+                    }
+                }
+            } catch (e: Exception) {
+                updateStatus("Connection Error: ${e.message}")
+            }
+        }
+    }
