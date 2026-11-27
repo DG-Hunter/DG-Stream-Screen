@@ -175,6 +175,7 @@ private fun discoverStbDevices() {
     executor.execute {
         val found = mutableListOf<StbDevice>()
         val prefix = getLocalSubnetPrefix()
+        
         if (prefix != null) {
             val latch = CountDownLatch(254)
             for (i in 1..254) {
@@ -182,18 +183,25 @@ private fun discoverStbDevices() {
                 executor.execute {
                     try {
                         val s = Socket()
-                        s.connect(InetSocketAddress(testIp, 20000), 150)
+                        // Timeout 500ms is enough for local network
+                        s.connect(InetSocketAddress(testIp, 20000), 500)
                         s.close()
+                        
                         synchronized(found) {
                             if (found.none { it.ip == testIp }) {
                                 found.add(StbDevice("STB Receiver ($testIp)", testIp, 20000, "STB"))
                             }
                         }
-                    } catch (_: Exception) {} finally { latch.countDown() }
+                    } catch (_: Exception) {
+                        // Ignore if no device found
+                    } finally {
+                        latch.countDown()
+                    }
                 }
             }
-            try { latch.await(3, TimeUnit.SECONDS) } catch (_: Exception) {}
+            try { latch.await(4, TimeUnit.SECONDS) } catch (_: Exception) {}
         }
+        
         runOnUiThread {
             if (found.isEmpty()) {
                 tvStatus.text = "No STB found. Enter IP manually."
@@ -322,20 +330,26 @@ private fun fetchSatellites(out: OutputStream, inp: InputStream): List<SatItem> 
 private fun fetchAllChannelsPaginated(out: OutputStream, inp: InputStream): List<ChannelItem> {
     val result = mutableListOf<ChannelItem>()
     val seenIds = HashSet<String>()
-    val requestModes = listOf("1000", "0")
+    
+    // Try different request codes that GM Screen usually uses
+    val requestModes = listOf("1000", "0", "20")
     
     for (reqCode in requestModes) {
         var fromIdx = 0
         val step = 150
         var emptyPages = 0
+        
         while (fromIdx < 6000 && emptyPages < 2) {
             val toIdx = fromIdx + step - 1
+            // Send XML command
             val cmd = "<Command request=\"$reqCode\"><FromIndex>$fromIdx</FromIndex><ToIndex>$toIdx</ToIndex></Command>"
-            drainIncomingPackets(inp, 120)
+            
+            drainIncomingPackets(inp, 150)
             sendGmCommand(out, cmd)
 
-            val raw = readMatchingResponse(inp, 3200) { text ->
-                !isSignalPacket(text) && (text.contains("ServiceName") || text.contains("ProgramName") || text.contains("ChannelName") || text.contains("ServiceID") || text.contains("ProgramId") || text.contains("\"Name\""))
+            // Read response as raw text (after Zlib decompression)
+            val raw = readMatchingResponse(inp, 3500) { text ->
+                text.contains("ServiceName") || text.contains("ProgramName") || text.contains("ChannelName") || text.contains("ServiceID")
             }
 
             if (raw == null) {
@@ -344,41 +358,54 @@ private fun fetchAllChannelsPaginated(out: OutputStream, inp: InputStream): List
                 continue
             }
 
-            val arr = extractJsonArray(raw)
-            if (arr == null || arr.length() == 0) {
-                emptyPages++
-                fromIdx += step
-                continue
-            }
-
+            // Extract channels from XML/Text using Regex or simple parsing
             var addedInBatch = 0
-            for (i in 0 until arr.length()) {
-                val obj = arr.optJSONObject(i) ?: continue
-                val chName = obj.optString("ServiceName", obj.optString("ProgramName", obj.optString("ChannelName", obj.optString("Name", "")))).trim()
+            
+            // Simple text extraction based on common tags
+            val nameRegex = Regex("<(?:ServiceName|ProgramName|ChannelName|Name)>(.*?)</(?:ServiceName|ProgramName|ChannelName|Name)>", RegexOption.IGNORE_CASE)
+            val idRegex = Regex("<(?:ServiceID|ProgramId|ChannelID)>(.*?)</(?:ServiceID|ProgramId|ChannelID)>", RegexOption.IGNORE_CASE)
+            val satRegex = Regex("<(?:SatIndex|SatelliteIndex|SatID)>(.*?)</(?:SatIndex|SatelliteIndex|SatID)>", RegexOption.IGNORE_CASE)
+            
+            val names = nameRegex.findAll(raw).map { it.groupValues[1].trim() }.toList()
+            val ids = idRegex.findAll(raw).map { it.groupValues[1].trim() }.toList()
+            val sats = satRegex.findAll(raw).map { it.groupValues[1].trim().toIntOrNull() ?: -1 }.toList()
+
+            for (i in names.indices) {
+                val chName = names[i]
                 if (chName.isEmpty()) continue
-
-                val srvId = obj.optString("ServiceID", obj.optString("ProgramId", obj.optString("ChannelID", "${fromIdx + i}")))
-                val chIndex = obj.optInt("ProgramIndex", obj.optInt("ServiceIndex", obj.optInt("Index", result.size + 1)))
-                val satIdx = obj.optInt("SatIndex", obj.optInt("SatelliteIndex", obj.optInt("SatID", -1)))
-                val satName = satList.firstOrNull { it.index == satIdx }?.name ?: obj.optString("SatName", "")
-                val radioFlag = obj.optInt("Radio", obj.optInt("IsRadio", 0)) == 1 || obj.optString("ServiceType", "").equals("Radio", true)
-                val scrambleFlag = obj.optInt("Scramble", obj.optInt("IsScrambled", obj.optInt("CA", 0))) == 1
-                val favFlag = obj.optInt("Fav", obj.optInt("IsFav", obj.optInt("Favorite", 0))) > 0
-                val lockFlag = obj.optInt("Lock", obj.optInt("IsLocked", 0)) == 1
-
-                val uniqueKey = "$srvId|$chName|$radioFlag"
+                
+                val srvId = if (i < ids.size) ids[i] else "${fromIdx + i}"
+                val satIdx = if (i < sats.size) sats[i] else -1
+                val satName = satList.firstOrNull { it.index == satIdx }?.name ?: ""
+                
+                val uniqueKey = "$srvId|$chName"
                 if (seenIds.add(uniqueKey)) {
-                    result.add(ChannelItem(if (chIndex > 0) chIndex else result.size + 1, srvId, chName, satIdx, satName, radioFlag, scrambleFlag, favFlag, lockFlag, obj))
+                    result.add(
+                        ChannelItem(
+                            index = result.size + 1,
+                            serviceId = srvId,
+                            name = chName,
+                            satIndex = satIdx,
+                            satName = satName,
+                            isRadio = false, // Will be set later if needed
+                            isScrambled = false,
+                            isFav = false,
+                            isLocked = false,
+                            rawObj = JSONObject() // Empty object since we are not using JSON
+                        )
+                    )
                     addedInBatch++
                 }
             }
-            if (addedInBatch == 0 || arr.length() < step / 2) break
+            
+            if (addedInBatch == 0 || addedInBatch < step / 2) break
             fromIdx += step
         }
         if (result.isNotEmpty()) break
     }
     return result
 }
+
 private fun sendGmCommand(out: OutputStream, payload: String) {
     val body = payload.toByteArray(Charsets.UTF_8)
     val header = String.format("Start%07dEnd", body.size).toByteArray(Charsets.UTF_8)
