@@ -217,34 +217,55 @@ class MainActivity : Activity() {
         }
     }
     // ==================== 1. STB Network Discovery ====================
-    private fun discoverStbDevices() {
-        tvStatus.text = "Scanning network for Géant / StarSat STB..."
-        executor.execute {
-            val found = mutableListOf<StbDevice>()
-            try {
-                val udpSocket = DatagramSocket()
-                udpSocket.broadcast = true
-                udpSocket.soTimeout = 1800
-
-                val probes = listOf(
-                    "{\"request\":\"998\"}",
-                    "GM_SEARCH_STB",
-                    "{\"cmd\":\"discover\"}"
-                )
-                val ports = listOf(20000, 19000, 8888)
-                for (p in ports) {
-                    for (msg in probes) {
-                        try {
-                            val data = msg.toByteArray(Charsets.UTF_8)
-                            val packet = DatagramPacket(
-                                data, data.size,
-                                InetAddress.getByName("255.255.255.255"), p
-                            )
-                            udpSocket.send(packet)
-                        } catch (_: Exception) {
+    // ==================== 1. STB Network Discovery ====================
+private fun discoverStbDevices() {
+    tvStatus.text = "Scanning network (TCP) for STB devices..."
+    
+    executor.execute {
+        val found = mutableListOf<StbDevice>()
+        val prefix = getLocalSubnetPrefix()
+        
+        if (prefix != null) {
+            val latch = CountDownLatch(254)
+            // Scan 254 IPs very quickly
+            for (i in 1..254) {
+                val testIp = "$prefix.$i"
+                executor.execute {
+                    try {
+                        val s = Socket()
+                        // 150ms timeout is enough for local network
+                        s.connect(InetSocketAddress(testIp, 20000), 150)
+                        s.close()
+                        
+                        synchronized(found) {
+                            if (found.none { it.ip == testIp }) {
+                                found.add(StbDevice("STB Receiver ($testIp)", testIp, 20000, "STB"))
+                            }
                         }
+                    } catch (_: Exception) {
+                        // Ignore if no device is at this IP
+                    } finally {
+                        latch.countDown()
                     }
                 }
+            }
+            // Wait max 3 seconds for all scans to finish
+            try {
+                latch.await(3, TimeUnit.SECONDS)
+            } catch (_: Exception) {}
+        }
+
+        runOnUiThread {
+            if (found.isEmpty()) {
+                tvStatus.text = "No STB found. Enter IP manually."
+                Toast.makeText(this, "No STB found automatically", Toast.LENGTH_SHORT).show()
+            } else {
+                tvStatus.text = "Found ${found.size} STB device(s)"
+                showDeviceSelectionDialog(found)
+            }
+        }
+    }
+
 
                 val buf = ByteArray(2048)
                 val start = System.currentTimeMillis()
