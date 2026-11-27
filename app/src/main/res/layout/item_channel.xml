@@ -2,180 +2,76 @@
 <LinearLayout xmlns:android="http://android.com"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:orientation="vertical"
-    android:background="#1E293B"
-    android:layout_marginBottom="1dp">
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:background="#131926"
+    android:padding="10dp"
+    android:layout_marginBottom="4dp">
+
+    <TextView
+        android:id="@+id/tvChNum"
+        android:layout_width="46dp"
+        android:layout_height="wrap_content"
+        android:text="0001"
+        android:textColor="#38BDF8"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:gravity="center"/>
 
     <LinearLayout
-        android:id="@+id/rowChannelMain"
-        android:layout_width="match_parent"
-        android:layout_height="60dp"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:paddingStart="12dp"
-        android:paddingEnd="8dp"
-        android:background="?android:attr/selectableItemBackground">
+        android:layout_width="0dp"
+        android:layout_weight="1"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingLeft="8dp"
+        android:paddingRight="8dp">
 
         <TextView
-            android:id="@+id/tvChannelNum"
-            android:layout_width="44dp"
+            android:id="@+id/tvChIdent"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="1"
-            android:textColor="#38BDF8"
-            android:textSize="16sp"
+            android:text="Channel Name"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp"
             android:textStyle="bold"
-            android:gravity="center" />
+            android:singleLine="true"/>
 
         <LinearLayout
-            android:layout_width="0dp"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:orientation="vertical"
-            android:paddingStart="8dp"
-            android:paddingEnd="6dp">
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginTop="2dp">
 
             <TextView
-                android:id="@+id/tvChannelName"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Channel Name"
-                android:textColor="#F8FAFC"
-                android:textSize="15sp"
-                android:textStyle="bold"
-                android:maxLines="1"
-                android:ellipsize="end" />
-          
-            <LinearLayout
+                android:id="@+id/tvChIcons"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:layout_marginTop="3dp"
-                android:gravity="center_vertical">
+                android:text="FTA"
+                android:textColor="#4ADE80"
+                android:textSize="11sp"
+                android:layout_marginRight="6dp"/>
 
-                <TextView
-                    android:id="@+id/tvBadgeScramble"
-                    android:layout_width="18dp"
-                    android:layout_height="18dp"
-                    android:text="$"
-                    android:textColor="#FACC15"
-                    android:textSize="12sp"
-                    android:textStyle="bold"
-                    android:gravity="center"
-                    android:layout_marginEnd="6dp" />
-
-                <TextView
-                    android:id="@+id/tvBadgeFav"
-                    android:layout_width="18dp"
-                    android:layout_height="18dp"
-                    android:text="♥"
-                    android:textColor="#94A3B8"
-                    android:textSize="13sp"
-                    android:gravity="center"
-                    android:layout_marginEnd="6dp" />
-
-                <TextView
-                    android:id="@+id/tvBadgeLock"
-                    android:layout_width="18dp"
-                    android:layout_height="18dp"
-                    android:text="🔒"
-                    android:textColor="#94A3B8"
-                    android:textSize="11sp"
-                    android:gravity="center"
-                    android:layout_marginEnd="8dp" />
-
-                <TextView
-                    android:id="@+id/tvChannelSat"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text=""
-                    android:textColor="#64748B"
-                    android:textSize="11sp"
-                    android:maxLines="1" />
-            </LinearLayout>
+            <TextView
+                android:id="@+id/tvChMeta"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:text="Nilesat • 11680 H 27500"
+                android:textColor="#94A3B8"
+                android:textSize="11sp"
+                android:singleLine="true"/>
         </LinearLayout>
-
-        <TextView
-            android:id="@+id/btnChannelMore"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:text="•••"
-            android:textColor="#CBD5E1"
-            android:textSize="16sp"
-            android:textStyle="bold"
-            android:gravity="center"
-            android:background="?android:attr/selectableItemBackgroundBorderless" />
     </LinearLayout>
 
-        <LinearLayout
-        android:id="@+id/layoutChannelActions"
-        android:layout_width="match_parent"
-        android:layout_height="56dp"
-        android:orientation="horizontal"
-        android:background="#0F172A"
-        android:gravity="center"
-        android:visibility="gone"
-        android:paddingStart="4dp"
-        android:paddingEnd="4dp">
-
-        <Button
-            android:id="@+id/btnActPlay"
-            android:layout_width="0dp"
-            android:layout_height="46dp"
-            android:layout_weight="1"
-            android:text="▶\nJouer"
-            android:textSize="10sp"
-            android:textColor="#38BDF8"
-            android:background="?android:attr/selectableItemBackground"
-            android:padding="2dp"
-            android:textAllCaps="false" />
-
-        <Button
-            android:id="@+id/btnActFav"
-            android:layout_width="0dp"
-            android:layout_height="46dp"
-            android:layout_weight="1"
-            android:text="♥\nFavori"
-            android:textSize="10sp"
-            android:textColor="#F43F5E"
-            android:background="?android:attr/selectableItemBackground"
-            android:padding="2dp"
-            android:textAllCaps="false" />
-
-        <Button
-            android:id="@+id/btnActRename"
-            android:layout_width="0dp"
-            android:layout_height="46dp"
-            android:layout_weight="1"
-            android:text="✎\nRenommer"
-            android:textSize="10sp"
-            android:textColor="#E2E8F0"
-            android:background="?android:attr/selectableItemBackground"
-            android:padding="2dp"
-            android:textAllCaps="false" />
-
-        <Button
-            android:id="@+id/btnActDelete"
-            android:layout_width="0dp"
-            android:layout_height="46dp"
-            android:layout_weight="1"
-            android:text="🗑\nEffacer"
-            android:textSize="10sp"
-            android:textColor="#EF4444"
-            android:background="?android:attr/selectableItemBackground"
-            android:padding="2dp"
-            android:textAllCaps="false" />
-
-        <Button
-            android:id="@+id/btnActLock"
-            android:layout_width="0dp"
-            android:layout_height="46dp"
-            android:layout_weight="1"
-            android:text="🔒\nFermer"
-            android:textSize="10sp"
-            android:textColor="#FACC15"
-            android:background="?android:attr/selectableItemBackground"
-            android:padding="2dp"
-            android:textAllCaps="false" />
-    </LinearLayout>
+    <Button
+        android:id="@+id/btnChOptions"
+        android:layout_width="44dp"
+        android:layout_height="38dp"
+        android:text="•••"
+        android:textColor="#38BDF8"
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:background="#1E293B"/>
 
 </LinearLayout>
