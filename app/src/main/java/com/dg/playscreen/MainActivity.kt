@@ -1,716 +1,986 @@
 package com.dg.playscreen
 
 import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
-import android.graphics.Color
+import android.content.res.ColorStateList
+import android.media.AudioManager
+import android.media.ToneGenerator
+import android.net.TrafficStats
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.*
-import android.app.Activity
-import org.json.JSONArray
-import org.json.JSONObject
-import java.io.ByteArrayOutputStream
+import androidx.appcompat.app.AppCompatActivity
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import kotlinx.coroutines.*
+import org.videolan.libvlc.LibVLC
+import org.videolan.libvlc.Media
+import org.videolan.libvlc.MediaPlayer
+import org.videolan.libvlc.util.VLCVideoLayout
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
-import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
-import java.net.NetworkInterface
 import java.net.Socket
-import java.nio.charset.Charset
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
-import java.util.zip.Inflater
+import java.util.Collections
+import java.util.Locale
 
-class MainActivity : Activity() {
+data class DvbChannel(
+    var index: Int,
+    val rawIdent: String,
+    val provider: String,
+    val serviceId: String,
+    val satName: String,
+    val freq: String,
+    val pol: String,
+    val symRate: String,
+    val dvbSystem: String,
+    val modulation: String,
+    val fec: String,
+    val isScrambled: Boolean,
+    val isHd: Boolean,
+    val vPid: String,
+    val aPid: String,
+    val isFav: Boolean = false,
+    val isLocked: Boolean = false
+)
 
-    data class StbDevice(val name: String, val ip: String, val port: Int, val model: String)
-    data class SatItem(val index: Int, val name: String, val angle: String)
-    data class ChannelItem(
-        val index: Int, val serviceId: String, val name: String, val satIndex: Int, val satName: String,
-        val isRadio: Boolean, val isScrambled: Boolean, val isFav: Boolean, val isLocked: Boolean, val rawObj: JSONObject
-    )
+class ChannelAdapter(
+    private val items: MutableList<DvbChannel>,
+    private val onPlayClick: (DvbChannel) -> Unit,
+    private val onOptionsClick: (DvbChannel) -> Unit
+) : RecyclerView.Adapter<ChannelAdapter.ViewHolder>() {
 
-    private lateinit var etIpPort: EditText
-    private lateinit var btnScan: Button
-    private lateinit var btnConnect: Button
+    class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+        val tvChNum: TextView = view.findViewById(R.id.tvChNum)
+        val tvChIdent: TextView = view.findViewById(R.id.tvChIdent)
+        val tvChIcons: TextView = view.findViewById(R.id.tvChIcons)
+        val tvChMeta: TextView = view.findViewById(R.id.tvChMeta)
+        val btnChOptions: Button = view.findViewById(R.id.btnChOptions)
+    }
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
+        val v = LayoutInflater.from(parent.context).inflate(R.layout.item_channel, parent, false)
+        return ViewHolder(v)
+    }
+
+    override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+        val ch = items[position]
+        holder.tvChNum.text = String.format(Locale.US, "%04d", ch.index)
+        holder.tvChIdent.text = ch.rawIdent
+
+        val icons = buildString {
+            if (ch.isScrambled) append("💲 ")
+            if (ch.isFav) append("❤️ ")
+            if (ch.isLocked) append("🔒 ")
+        }.trim()
+        holder.tvChIcons.text = if (icons.isNotEmpty()) icons else "FTA"
+
+        val satPart = if (ch.satName.isNotEmpty()) "${ch.satName} • " else ""
+        val freqPart = if (ch.freq.isNotEmpty()) "${ch.freq} ${ch.pol} ${ch.symRate}" else ch.dvbSystem
+        holder.tvChMeta.text = "$satPart$freqPart"
+
+        holder.itemView.setOnClickListener { onPlayClick(ch) }
+        holder.btnChOptions.setOnClickListener { onOptionsClick(ch) }
+    }
+
+    override fun getItemCount(): Int = items.size
+}
+
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var etIpAddress: EditText
     private lateinit var tvStatus: TextView
-    private lateinit var tabChannels: Button
-    private lateinit var tabRemote: Button
-    private lateinit var tabSatfinder: Button
-    private lateinit var layoutChannelsTab: LinearLayout
-    private lateinit var layoutRemoteTab: View
-    private lateinit var layoutSatfinderTab: View
-    private lateinit var btnTvRadioToggle: Button
-    private lateinit var btnSatDropdown: Button
-    private lateinit var etSearchChannel: EditText
-    private lateinit var lvChannels: ListView
+    private lateinit var rvChannels: RecyclerView
+    private lateinit var playerContainer: FrameLayout
+    private lateinit var vlcVideoLayout: FrameLayout
+
+    private lateinit var layoutInfoBar: LinearLayout
+    private lateinit var tvInfoChannelName: TextView
+    private lateinit var tvBadgeRes: TextView
+    private lateinit var tvBadgeCrypt: TextView
+    private lateinit var tvInfoDb: TextView
+    private lateinit var tvInfoSatFreq: TextView
+    private lateinit var tvInfoModulation: TextView
+    private lateinit var tvInfoBitrate: TextView
+    private lateinit var tvInfoPids: TextView
     private lateinit var pbStrength: ProgressBar
+    private lateinit var tvStrengthVal: TextView
     private lateinit var pbQuality: ProgressBar
-    private lateinit var tvStrengthPct: TextView
-    private lateinit var tvQualityPct: TextView
-    private lateinit var tvSatSignalInfo: TextView
+    private lateinit var tvQualityVal: TextView
 
-    private val executor = Executors.newCachedThreadPool()
-    private val socketLock = Any()
+    private lateinit var tvSatFinderFreq: TextView
+    private lateinit var tvSatFinderDb: TextView
+    private lateinit var pbSatSignal: ProgressBar
+    private lateinit var pbSatQuality: ProgressBar
+    private lateinit var tvSatFinderSatName: TextView
+    private lateinit var tvSatStrengthVal: TextView
+    private lateinit var tvSatQualityVal: TextView
 
-    private var currentIp = ""
-    private var currentPort = 20000
-    private var stbModel = "STB"
-    private var isConnected = false
+    private var isBeepActive = false
+    private var toneGenerator: ToneGenerator? = null
 
-    private val satList = mutableListOf<SatItem>()
-    private val allChannels = mutableListOf<ChannelItem>()
-    private val filteredChannels = mutableListOf<ChannelItem>()
-    private lateinit var channelAdapter: ChannelAdapter
+    private var libVlc: LibVLC? = null
+    private var mediaPlayer: MediaPlayer? = null
+    private var isFullscreen = false
 
-    private var showRadio = false
-    private var selectedSatIndex = -1
-    private var selectedSatLabel = "Toutes les chaînes"
-    private var expandedChannelIndex = -1
+    private var tcpSocket: Socket? = null
+    private var outputStream: OutputStream? = null
+    private var inputStream: InputStream? = null
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var monitorJob: Job? = null
 
-    @Volatile private var satfinderRunning = false
+    private val allChannels = mutableListOf<DvbChannel>()
+    private val filteredChannels = mutableListOf<DvbChannel>()
+    private val discoveredSatellites = mutableListOf<String>()
+    private var selectedSatFilter: String = "ALL"
+    private var isRadioMode: Boolean = false
+
+    private lateinit var adapter: ChannelAdapter
+    private var currentIp: String = ""
+    private var videoResInfo: String = "HEVC/H.264"
+
     override fun onCreate(savedInstanceState: Bundle?) {
-    super.onCreate(savedInstanceState)
-    try {
-        setContentView(R.layout.activity_main)
-        bindViews()
-        setupTabs()
-        setupChannelControls()
-        setupRemoteButtons()
-        setupConnectionButtons()
-    } catch (e: Throwable) {
-        val tvError = TextView(this)
-        tvError.setTextColor(Color.WHITE)
-        tvError.setBackgroundColor(Color.BLACK)
-        tvError.setPadding(24, 24, 24, 24)
-        tvError.text = "Startup Error:\n${e.javaClass.name}\n${e.message}\n\n${android.util.Log.getStackTraceString(e)}"
-        val scroll = ScrollView(this)
-        scroll.addView(tvError)
-        setContentView(scroll)
-    }
-}
-
-private fun bindViews() {
-    etIpPort = findViewById(R.id.etIpPort)
-    btnScan = findViewById(R.id.btnScan)
-    btnConnect = findViewById(R.id.btnConnect)
-    tvStatus = findViewById(R.id.tvStatus)
-    tabChannels = findViewById(R.id.tabChannels)
-    tabRemote = findViewById(R.id.tabRemote)
-    tabSatfinder = findViewById(R.id.tabSatfinder)
-    layoutChannelsTab = findViewById(R.id.layoutChannelsTab)
-    layoutRemoteTab = findViewById(R.id.layoutRemoteTab)
-    layoutSatfinderTab = findViewById(R.id.layoutSatfinderTab)
-    btnTvRadioToggle = findViewById(R.id.btnTvRadioToggle)
-    btnSatDropdown = findViewById(R.id.btnSatDropdown)
-    etSearchChannel = findViewById(R.id.etSearchChannel)
-    lvChannels = findViewById(R.id.lvChannels)
-    pbStrength = findViewById(R.id.pbStrength)
-    pbQuality = findViewById(R.id.pbQuality)
-    tvStrengthPct = findViewById(R.id.tvStrengthPct)
-    tvQualityPct = findViewById(R.id.tvQualityPct)
-    tvSatSignalInfo = findViewById(R.id.tvSatSignalInfo)
-    channelAdapter = ChannelAdapter()
-    lvChannels.adapter = channelAdapter
-}
-private fun setupTabs() {
-    tabChannels.setOnClickListener { switchTab(0) }
-    tabRemote.setOnClickListener { switchTab(1) }
-    tabSatfinder.setOnClickListener { switchTab(2) }
-    switchTab(0)
-}
-
-private fun switchTab(index: Int) {
-    satfinderRunning = (index == 2)
-    layoutChannelsTab.visibility = if (index == 0) View.VISIBLE else View.GONE
-    layoutRemoteTab.visibility = if (index == 1) View.VISIBLE else View.GONE
-    layoutSatfinderTab.visibility = if (index == 2) View.VISIBLE else View.GONE
-    tabChannels.setBackgroundColor(if (index == 0) Color.parseColor("#0284C7") else Color.parseColor("#1E293B"))
-    tabRemote.setBackgroundColor(if (index == 1) Color.parseColor("#0284C7") else Color.parseColor("#1E293B"))
-    tabSatfinder.setBackgroundColor(if (index == 2) Color.parseColor("#0284C7") else Color.parseColor("#1E293B"))
-    if (index == 2 && isConnected) startSatfinderPolling()
-}
-
-private fun setupChannelControls() {
-    btnTvRadioToggle.setOnClickListener {
-        showRadio = !showRadio
-        btnTvRadioToggle.text = if (showRadio) "RADIO" else "TV"
-        btnTvRadioToggle.setBackgroundColor(if (showRadio) Color.parseColor("#EA580C") else Color.parseColor("#0284C7"))
-        applyChannelFilter()
-    }
-    btnSatDropdown.setOnClickListener { showSatSelectionDialog() }
-    etSearchChannel.addTextChangedListener(object : TextWatcher {
-        override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-        override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { applyChannelFilter() }
-        override fun afterTextChanged(s: Editable?) {}
-    })
-}
-
-private fun setupConnectionButtons() {
-    btnScan.setOnClickListener { discoverStbDevices() }
-    btnConnect.setOnClickListener {
-        val raw = etIpPort.text.toString().trim()
-        if (raw.isEmpty()) {
-            Toast.makeText(this, "Enter STB IP or press SCAN", Toast.LENGTH_SHORT).show()
-            return@setOnClickListener
+        super.onCreate(savedInstanceState)
+        try {
+            setContentView(R.layout.activity_main)
+        } catch (t: Throwable) {
+            val tv = TextView(this).apply {
+                text = "CRASH ERROR:\n${t.message}\n\n${t.stackTraceToString().take(800)}"
+                setTextColor(0xFFFFFFFF.toInt())
+                setBackgroundColor(0xFF991B1B.toInt())
+                setPadding(32, 64, 32, 32)
+                textSize = 13f
+            }
+            setContentView(tv)
+            return
         }
-        val parts = raw.split(":")
-        currentIp = parts[0].trim()
-        currentPort = if (parts.size > 1) parts[1].trim().toIntOrNull() ?: 20000 else 20000
-        connectAndLoadData()
-    }
-}
 
-private fun discoverStbDevices() {
-    tvStatus.text = "Scanning network (TCP) for STB devices..."
-    executor.execute {
-        val found = mutableListOf<StbDevice>()
-        val prefix = getLocalSubnetPrefix()
-        
-        if (prefix != null) {
-            val latch = CountDownLatch(254)
-            for (i in 1..254) {
-                val testIp = "$prefix.$i"
-                executor.execute {
-                    try {
-                        val s = Socket()
-                        // Timeout 500ms is enough for local network
-                        s.connect(InetSocketAddress(testIp, 20000), 500)
-                        s.close()
-                        
-                        synchronized(found) {
-                            if (found.none { it.ip == testIp }) {
-                                found.add(StbDevice("STB Receiver ($testIp)", testIp, 20000, "STB"))
+        etIpAddress = findViewById(R.id.etIpAddress)
+        tvStatus = findViewById(R.id.tvStatus)
+        rvChannels = findViewById(R.id.rvChannels)
+        playerContainer = findViewById(R.id.playerContainer)
+        vlcVideoLayout = findViewById(R.id.vlcVideoLayout)
+
+        layoutInfoBar = findViewById(R.id.layoutInfoBar)
+        tvInfoChannelName = findViewById(R.id.tvInfoChannelName)
+        tvBadgeRes = findViewById(R.id.tvBadgeRes)
+        tvBadgeCrypt = findViewById(R.id.tvBadgeCrypt)
+        tvInfoDb = findViewById(R.id.tvInfoDb)
+        tvInfoSatFreq = findViewById(R.id.tvInfoSatFreq)
+        tvInfoModulation = findViewById(R.id.tvInfoModulation)
+        tvInfoBitrate = findViewById(R.id.tvInfoBitrate)
+        tvInfoPids = findViewById(R.id.tvInfoPids)
+        pbStrength = findViewById(R.id.pbStrength)
+        tvStrengthVal = findViewById(R.id.tvStrengthVal)
+        pbQuality = findViewById(R.id.pbQuality)
+        tvQualityVal = findViewById(R.id.tvQualityVal)
+
+        tvSatFinderFreq = findViewById(R.id.tvSatFinderFreq)
+        tvSatFinderDb = findViewById(R.id.tvSatFinderDb)
+        pbSatSignal = findViewById(R.id.pbSatSignal)
+        pbSatQuality = findViewById(R.id.pbSatQuality)
+        tvSatFinderSatName = findViewById(R.id.tvSatFinderSatName)
+        tvSatStrengthVal = findViewById(R.id.tvSatStrengthVal)
+        tvSatQualityVal = findViewById(R.id.tvSatQualityVal)
+
+        try { toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 90) } catch (_: Throwable) {}
+        initLibVlcPlayer()
+
+        val prefs = getSharedPreferences("DGPlayPrefs", Context.MODE_PRIVATE)
+        etIpAddress.setText(prefs.getString("last_ip", ""))
+
+        adapter = ChannelAdapter(
+            filteredChannels,
+            onPlayClick = { ch -> showPlayerDialog(ch) },
+            onOptionsClick = { ch -> showPlayerDialog(ch) }
+        )
+        rvChannels.layoutManager = LinearLayoutManager(this)
+        rvChannels.adapter = adapter
+
+        findViewById<Button>(R.id.btnStopPlayer).setOnClickListener {
+            try { mediaPlayer?.stop() } catch (_: Throwable) {}
+            playerContainer.visibility = View.GONE
+            if (isFullscreen) toggleFullscreen()
+        }
+        findViewById<Button>(R.id.btnFullscreen).setOnClickListener { toggleFullscreen() }
+
+        val layoutChannels = findViewById<LinearLayout>(R.id.layoutChannels)
+        val layoutRemote = findViewById<ScrollView>(R.id.layoutRemote)
+        val layoutSatFinder = findViewById<LinearLayout>(R.id.layoutSatFinder)
+        val btnTabChannels = findViewById<Button>(R.id.btnTabChannels)
+        val btnTabRemote = findViewById<Button>(R.id.btnTabRemote)
+        val btnTabSatFinder = findViewById<Button>(R.id.btnTabSatFinder)
+
+        fun selectTab(tab: Int) {
+            layoutChannels.visibility = if (tab == 0) View.VISIBLE else View.GONE
+            layoutRemote.visibility = if (tab == 1) View.VISIBLE else View.GONE
+            layoutSatFinder.visibility = if (tab == 2) View.VISIBLE else View.GONE
+            btnTabChannels.setBackgroundColor(if (tab == 0) 0xFF0284C7.toInt() else 0xFF1E293B.toInt())
+            btnTabRemote.setBackgroundColor(if (tab == 1) 0xFF0284C7.toInt() else 0xFF1E293B.toInt())
+            btnTabSatFinder.setBackgroundColor(if (tab == 2) 0xFF0284C7.toInt() else 0xFF1E293B.toInt())
+            if (tab == 2) startTelemetryMonitor()
+        }
+
+        btnTabChannels.setOnClickListener { selectTab(0) }
+        btnTabRemote.setOnClickListener { selectTab(1) }
+        btnTabSatFinder.setOnClickListener { selectTab(2) }
+
+        val btnToggleTvRadio = findViewById<Button>(R.id.btnToggleTvRadio)
+        val btnSelectSatFilter = findViewById<Button>(R.id.btnSelectSatFilter)
+
+        btnToggleTvRadio.setOnClickListener {
+            isRadioMode = !isRadioMode
+            btnToggleTvRadio.text = if (isRadioMode) "RADIO" else "TV"
+            btnToggleTvRadio.setBackgroundColor(if (isRadioMode) 0xFFD97706.toInt() else 0xFF0284C7.toInt())
+            val ip = etIpAddress.text.toString().trim()
+            if (ip.isNotEmpty()) connectAndFetchChannels(ip)
+        }
+
+        btnSelectSatFilter.setOnClickListener {
+            val options = mutableListOf("Toutes les chaînes (All)", "★ Favoris (Favorites)")
+            options.addAll(discoveredSatellites)
+            AlertDialog.Builder(this)
+                .setTitle("Sélectionner un Satellite")
+                .setItems(options.toTypedArray()) { _, which ->
+                    when (which) {
+                        0 -> {
+                            selectedSatFilter = "ALL"
+                            btnSelectSatFilter.text = "Toutes les chaînes ▾"
+                        }
+                        1 -> {
+                            selectedSatFilter = "FAV"
+                            btnSelectSatFilter.text = "★ Favoris ▾"
+                        }
+                        else -> {
+                            selectedSatFilter = options[which]
+                            btnSelectSatFilter.text = "$selectedSatFilter ▾"
+                        }
+                    }
+                    applyChannelFilters(findViewById<EditText>(R.id.etSearchChannel).text.toString())
+                }
+                .show()
+        }
+
+        val btnToggleBeep = findViewById<Button>(R.id.btnToggleBeep)
+        btnToggleBeep.setOnClickListener {
+            isBeepActive = !isBeepActive
+            btnToggleBeep.text = if (isBeepActive) "Disable Audio Beep" else "Enable Audio Beep"
+            btnToggleBeep.setBackgroundColor(if (isBeepActive) 0xFFDC2626.toInt() else 0xFF0284C7.toInt())
+        }
+
+        findViewById<EditText>(R.id.etSearchChannel).addTextChangedListener(object : TextWatcher {
+            override fun afterTextChanged(s: Editable?) { applyChannelFilters(s.toString()) }
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+        })
+
+        findViewById<Button>(R.id.btnScan).setOnClickListener { scanForReceivers() }
+        findViewById<Button>(R.id.btnConnect).setOnClickListener {
+            val ip = etIpAddress.text.toString().trim()
+            if (ip.isNotEmpty()) {
+                prefs.edit().putString("last_ip", ip).apply()
+                connectAndFetchChannels(ip)
+            }
+        }
+
+        bindKey(R.id.btnPower, 1); bindKey(R.id.btnMute, 2); bindKey(R.id.btnTvRadio, 31); bindKey(R.id.btnRecall, 32)
+        bindKey(R.id.btnSat, 37); bindKey(R.id.btnFav, 30); bindKey(R.id.btnEpg, 29); bindKey(R.id.btnFind, 40)
+        bindKey(R.id.btnNum0, 16); bindKey(R.id.btnNum1, 7); bindKey(R.id.btnNum2, 8); bindKey(R.id.btnNum3, 9)
+        bindKey(R.id.btnNum4, 10); bindKey(R.id.btnNum5, 11); bindKey(R.id.btnNum6, 12); bindKey(R.id.btnNum7, 13)
+        bindKey(R.id.btnNum8, 14); bindKey(R.id.btnNum9, 15); bindKey(R.id.btnAudio, 38); bindKey(R.id.btnSub, 39)
+        bindKey(R.id.btnMenu, 26); bindKey(R.id.btnExit, 27); bindKey(R.id.btnInfo, 28); bindKey(R.id.btnPage, 25)
+        bindKey(R.id.btnUp, 21); bindKey(R.id.btnDown, 22); bindKey(R.id.btnLeft, 23); bindKey(R.id.btnRight, 24); bindKey(R.id.btnOk, 25)
+        bindKey(R.id.btnVolUp, 17); bindKey(R.id.btnVolDown, 18); bindKey(R.id.btnChUp, 19); bindKey(R.id.btnChDown, 20)
+        bindKey(R.id.btnRed, 33); bindKey(R.id.btnGreen, 34); bindKey(R.id.btnYellow, 35); bindKey(R.id.btnBlue, 36)
+        bindKey(R.id.btnRew, 41); bindKey(R.id.btnPlayPause, 42); bindKey(R.id.btnStopMedia, 43); bindKey(R.id.btnFwd, 44); bindKey(R.id.btnRec, 45)
+    }
+
+    private fun applyChannelFilters(query: String) {
+        val q = query.lowercase().trim()
+        filteredChannels.clear()
+        filteredChannels.addAll(
+            allChannels.filter { ch ->
+                val matchesSat = when (selectedSatFilter) {
+                    "ALL" -> true
+                    "FAV" -> ch.isFav
+                    else -> ch.satName.equals(selectedSatFilter, ignoreCase = true)
+                }
+                val matchesText = q.isEmpty() ||
+                        ch.rawIdent.lowercase().contains(q) ||
+                        ch.satName.lowercase().contains(q) ||
+                        ch.freq.contains(q)
+                matchesSat && matchesText
+            }
+        )
+        adapter.notifyDataSetChanged()
+    }
+
+    private fun toggleFullscreen() {
+        isFullscreen = !isFullscreen
+        val header = findViewById<LinearLayout>(R.id.headerBar)
+        val connect = findViewById<LinearLayout>(R.id.connectBar)
+        val tabs = findViewById<LinearLayout>(R.id.tabBar)
+        val params = playerContainer.layoutParams as LinearLayout.LayoutParams
+        if (isFullscreen) {
+            header.visibility = View.GONE; connect.visibility = View.GONE
+            tvStatus.visibility = View.GONE; tabs.visibility = View.GONE
+            params.height = 0; params.weight = 1f
+        } else {
+            header.visibility = View.VISIBLE; connect.visibility = View.VISIBLE
+            tvStatus.visibility = View.VISIBLE; tabs.visibility = View.VISIBLE
+            params.height = (195 * resources.displayMetrics.density).toInt(); params.weight = 0f
+        }
+        playerContainer.layoutParams = params
+    }
+
+    private fun bindKey(buttonId: Int, keyCode: Int) {
+        findViewById<Button>(buttonId).setOnClickListener {
+            vibrateClick()
+            scope.launch { sendRawXml("<Command request=\"1040\"><key>$keyCode</key></Command>") }
+        }
+    }
+
+    private fun vibrateClick() {
+        try {
+            val v = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                v.vibrate(VibrationEffect.createOneShot(25, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else { @Suppress("DEPRECATION") v.vibrate(25) }
+        } catch (_: Throwable) {}
+    }
+
+    private fun initLibVlcPlayer() {
+        try {
+            val vlcView = VLCVideoLayout(this)
+            vlcVideoLayout.addView(vlcView, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ))
+            val options = arrayListOf("--network-caching=1200", "--clock-jitter=0", "--clock-synchro=0")
+            libVlc = LibVLC(this, options)
+            mediaPlayer = MediaPlayer(libVlc)
+            mediaPlayer?.attachViews(vlcView, null, false, false)
+            mediaPlayer?.setEventListener { event ->
+                if (event.type == MediaPlayer.Event.Vout) {
+                    val track = mediaPlayer?.currentVideoTrack
+                    if (track != null && track.width > 0) {
+                        val res = if (track.height >= 2160) "4K UHD" else if (track.height >= 1080) "1080p" else if (track.height >= 720) "720p" else "${track.height}i"
+                        videoResInfo = "${track.width}x${track.height} ($res)"
+                        runOnUiThread { tvBadgeRes.text = if (track.height >= 2160) "4K" else if (track.height >= 720) "HD" else "SD" }
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+            libVlc = null
+            mediaPlayer = null
+        }
+    }
+
+    private fun copyText(text: String, msg: String) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("DGPlay", text))
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun scanForReceivers() {
+        updateStatus("Scanning Wi-Fi & Hotspot for STB devices...")
+        scope.launch {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+            val lock = wifiManager?.createMulticastLock("dg_lock")?.apply { setReferenceCounted(true); acquire() }
+            try {
+                val subnets = mutableSetOf<String>()
+                java.net.NetworkInterface.getNetworkInterfaces()?.toList()?.forEach { iface ->
+                    if (iface.isUp && !iface.isLoopback) {
+                        iface.inetAddresses?.toList()?.filterIsInstance<java.net.Inet4Address>()?.forEach { addr ->
+                            val ip = addr.hostAddress ?: ""
+                            if (ip.contains(".") && !addr.isLoopbackAddress) {
+                                subnets.add(ip.substringBeforeLast(".") + ".")
                             }
                         }
-                    } catch (_: Exception) {
-                        // Ignore if no device found
-                    } finally {
-                        latch.countDown()
                     }
                 }
-            }
-            try { latch.await(4, TimeUnit.SECONDS) } catch (_: Exception) {}
-        }
-        
-        runOnUiThread {
-            if (found.isEmpty()) {
-                tvStatus.text = "No STB found. Enter IP manually."
-                Toast.makeText(this, "No STB found automatically", Toast.LENGTH_SHORT).show()
-            } else {
-                tvStatus.text = "Found ${found.size} STB device(s)"
-                showDeviceSelectionDialog(found)
-            }
-        }
-    }
-}
+                if (subnets.isEmpty()) subnets.addAll(listOf("192.168.1.", "192.168.43."))
 
-private fun getLocalSubnetPrefix(): String? {
-    try {
-        val interfaces = NetworkInterface.getNetworkInterfaces()
-        while (interfaces.hasMoreElements()) {
-            val intf = interfaces.nextElement()
-            val addrs = intf.inetAddresses
-            while (addrs.hasMoreElements()) {
-                val addr = addrs.nextElement()
-                if (!addr.isLoopbackAddress && addr is Inet4Address) {
-                    val ip = addr.hostAddress ?: continue
-                    val lastDot = ip.lastIndexOf('.')
-                    if (lastDot > 0) return ip.substring(0, lastDot)
+                val foundDevices = Collections.synchronizedList(mutableListOf<Pair<String, String>>())
+
+                try {
+                    val udp = DatagramSocket().apply { broadcast = true; soTimeout = 1000 }
+                    val msg = "smart_client_search".toByteArray()
+                    subnets.forEach { sub ->
+                        udp.send(DatagramPacket(msg, msg.size, InetAddress.getByName("${sub}255"), 25860))
+                    }
+                    val pkt = DatagramPacket(ByteArray(1024), 1024)
+                    udp.receive(pkt)
+                    val udpIp = pkt.address.hostAddress ?: ""
+                    if (udpIp.isNotEmpty()) {
+                        foundDevices.add(Pair("ALi Receiver ($udpIp:20000)", "$udpIp:20000"))
+                    }
+                    udp.close()
+                } catch (_: Exception) {}
+
+                if (foundDevices.isEmpty()) {
+                    for (sub in subnets) {
+                        (1..254).map { i ->
+                            async(Dispatchers.IO) {
+                                val testIp = "$sub$i"
+                                for (port in listOf(20000, 8000, 8888)) {
+                                    try {
+                                        Socket().use { s ->
+                                            s.connect(InetSocketAddress(testIp, port), 220)
+                                            s.soTimeout = 1200
+                                            var stbName = if (port == 20000) "ALi STB Receiver" else "GX STB Receiver"
+                                            if (port == 20000) {
+                                                s.getOutputStream().write(wrapGmScreenPacket("{\"request\":\"15\"}"))
+                                                s.getOutputStream().flush()
+                                                val reply = readGmScreenResponse(s.getInputStream())
+                                                val prod = Regex("\"ProductName\"\\s*:\\s*\"([^\"]+)\"").find(reply)?.groupValues?.get(1)
+                                                if (!prod.isNullOrEmpty()) stbName = prod
+                                            }
+                                            foundDevices.add(Pair("$stbName ($testIp:$port)", "$testIp:$port"))
+                                        }
+                                        break
+                                    } catch (_: Exception) {}
+                                }
+                            }
+                        }.awaitAll()
+                    }
                 }
-            }
-        }
-    } catch (_: Exception) {}
-    return null
-}
 
-private fun showDeviceSelectionDialog(devices: List<StbDevice>) {
-    val labels = devices.map { "${it.name}\n${it.ip}:${it.port}" }.toTypedArray()
-    AlertDialog.Builder(this)
-        .setTitle("Sélectionner un appareil STB")
-        .setItems(labels) { _, which ->
-            val chosen = devices[which]
-            currentIp = chosen.ip
-            currentPort = chosen.port
-            etIpPort.setText("${chosen.ip}:${chosen.port}")
-            connectAndLoadData()
-        }
-        .setNegativeButton("Annuler", null)
-        .show()
-}
-private fun connectAndLoadData() {
-    tvStatus.text = "Connecting to $currentIp:$currentPort ..."
-    executor.execute {
-        synchronized(socketLock) {
-            var socket: Socket? = null
-            try {
-                socket = Socket()
-                socket.connect(InetSocketAddress(currentIp, currentPort), 4000)
-                socket.soTimeout = 3500
-                val out = socket.getOutputStream()
-                val inp = socket.getInputStream()
-
-                drainIncomingPackets(inp, 250)
-
-                // 1. Handshake
-                val handshakeCmd = "<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><Command request=\"998\"><uuid>3aee69e8-2d6c-45f7-9fde-e1584dfc8108-02:00:00:00:00:00</uuid><data>PGN528</data></Command>"
-                sendGmCommand(out, handshakeCmd)
-                readMatchingResponse(inp, 2500) { true }
-
-                // 2. Request Channels
-                drainIncomingPackets(inp, 200)
-                sendGmCommand(out, "{\"request\":\"20\"}")
-                readMatchingResponse(inp, 3000) { true }
-
-                isConnected = true
-                runOnUiThread { tvStatus.text = "Connected ($stbModel) • Loading Sats & Channels..." }
-
-                val fetchedSats = fetchSatellites(out, inp)
-                satList.clear()
-                satList.addAll(fetchedSats)
-
-                runOnUiThread { tvStatus.text = "Connected ($stbModel) • ${satList.size} Sats • Loading Channels..." }
-
-                val fetchedChannels = fetchAllChannelsPaginated(out, inp)
-                allChannels.clear()
-                allChannels.addAll(fetchedChannels)
-
-                runOnUiThread {
-                    tvStatus.text = "Connected ($stbModel) • ${satList.size} Sats • ${allChannels.size} Ch."
-                    applyChannelFilter()
+                withContext(Dispatchers.Main) {
+                    if (foundDevices.isNotEmpty()) {
+                        updateStatus("Found ${foundDevices.size} STB device(s)")
+                        val labels = foundDevices.map { it.first }.toTypedArray()
+                        AlertDialog.Builder(this@MainActivity)
+                            .setTitle("Sélectionner un appareil STB")
+                            .setItems(labels) { _, which ->
+                                val chosenIp = foundDevices[which].second
+                                etIpAddress.setText(chosenIp)
+                                getSharedPreferences("DGPlayPrefs", Context.MODE_PRIVATE).edit().putString("last_ip", chosenIp).apply()
+                                connectAndFetchChannels(chosenIp)
+                            }
+                            .show()
+                    } else {
+                        updateStatus("No ALi/GX receiver found on ${subnets.joinToString()}")
+                    }
                 }
-            } catch (e: Exception) {
-                isConnected = false
-                runOnUiThread { tvStatus.text = "Connection error: ${e.message}" }
             } finally {
-                try { socket?.close() } catch (_: Exception) {}
+                if (lock?.isHeld == true) lock.release()
             }
         }
     }
-}
 
-private fun fetchSatellites(out: OutputStream, inp: InputStream): List<SatItem> {
-    val result = mutableListOf<SatItem>()
-    val satCmds = listOf(
-        "<Command request=\"1001\"></Command>",
-        "<Command request=\"2\"></Command>",
-        "<Command request=\"1001\"><FromIndex>0</FromIndex><ToIndex>100</ToIndex></Command>"
-    )
-    for (cmd in satCmds) {
-        drainIncomingPackets(inp, 150)
-        sendGmCommand(out, cmd)
-        val raw = readMatchingResponse(inp, 2500) { text ->
-            !isSignalPacket(text) && (text.contains("SatName") || text.contains("SatelliteName") || text.contains("Name"))
-        } ?: continue
-
-        val arr = extractJsonArray(raw) ?: continue
-        for (i in 0 until arr.length()) {
-            val obj = arr.optJSONObject(i) ?: continue
-            val name = obj.optString("SatName", obj.optString("SatelliteName", obj.optString("Name", "")))
-            if (name.isNotEmpty()) {
-                val idx = obj.optInt("SatIndex", obj.optInt("Index", i))
-                val angle = obj.optString("SatAngle", obj.optString("Angle", ""))
-                result.add(SatItem(idx, name, angle))
-            }
-        }
-        if (result.isNotEmpty()) break
+    private fun wrapGmScreenPacket(payloadStr: String): ByteArray {
+        val payloadBytes = payloadStr.toByteArray(Charsets.UTF_8)
+        val header = String.format(Locale.US, "Start%07dEnd", payloadBytes.size).toByteArray(Charsets.US_ASCII)
+        return header + payloadBytes
     }
-    return result
-}
 
-private fun fetchAllChannelsPaginated(out: OutputStream, inp: InputStream): List<ChannelItem> {
-    val result = mutableListOf<ChannelItem>()
-    val seenIds = HashSet<String>()
-    
-    // Try different request codes that GM Screen usually uses
-    val requestModes = listOf("1000", "0", "20")
-    
-    for (reqCode in requestModes) {
-        var fromIdx = 0
-        val step = 150
-        var emptyPages = 0
-        
-        while (fromIdx < 6000 && emptyPages < 2) {
-            val toIdx = fromIdx + step - 1
-            // Send XML command
-            val cmd = "<Command request=\"$reqCode\"><FromIndex>$fromIdx</FromIndex><ToIndex>$toIdx</ToIndex></Command>"
-            
-            drainIncomingPackets(inp, 150)
-            sendGmCommand(out, cmd)
-
-            // Read response as raw text (after Zlib decompression)
-            val raw = readMatchingResponse(inp, 3500) { text ->
-                text.contains("ServiceName") || text.contains("ProgramName") || text.contains("ChannelName") || text.contains("ServiceID")
-            }
-
-            if (raw == null) {
-                emptyPages++
-                fromIdx += step
-                continue
-            }
-
-            // Extract channels from XML/Text using Regex or simple parsing
-            var addedInBatch = 0
-            
-            // Simple text extraction based on common tags
-            val nameRegex = Regex("<(?:ServiceName|ProgramName|ChannelName|Name)>(.*?)</(?:ServiceName|ProgramName|ChannelName|Name)>", RegexOption.IGNORE_CASE)
-            val idRegex = Regex("<(?:ServiceID|ProgramId|ChannelID)>(.*?)</(?:ServiceID|ProgramId|ChannelID)>", RegexOption.IGNORE_CASE)
-            val satRegex = Regex("<(?:SatIndex|SatelliteIndex|SatID)>(.*?)</(?:SatIndex|SatelliteIndex|SatID)>", RegexOption.IGNORE_CASE)
-            
-            val names = nameRegex.findAll(raw).map { it.groupValues[1].trim() }.toList()
-            val ids = idRegex.findAll(raw).map { it.groupValues[1].trim() }.toList()
-            val sats = satRegex.findAll(raw).map { it.groupValues[1].trim().toIntOrNull() ?: -1 }.toList()
-
-            for (i in names.indices) {
-                val chName = names[i]
-                if (chName.isEmpty()) continue
-                
-                val srvId = if (i < ids.size) ids[i] else "${fromIdx + i}"
-                val satIdx = if (i < sats.size) sats[i] else -1
-                val satName = satList.firstOrNull { it.index == satIdx }?.name ?: ""
-                
-                val uniqueKey = "$srvId|$chName"
-                if (seenIds.add(uniqueKey)) {
-                    result.add(
-                        ChannelItem(
-                            index = result.size + 1,
-                            serviceId = srvId,
-                            name = chName,
-                            satIndex = satIdx,
-                            satName = satName,
-                            isRadio = false, // Will be set later if needed
-                            isScrambled = false,
-                            isFav = false,
-                            isLocked = false,
-                            rawObj = JSONObject() // Empty object since we are not using JSON
-                        )
-                    )
-                    addedInBatch++
-                }
-            }
-            
-            if (addedInBatch == 0 || addedInBatch < step / 2) break
-            fromIdx += step
-        }
-        if (result.isNotEmpty()) break
-    }
-    return result
-}
-
-private fun sendGmCommand(out: OutputStream, payload: String) {
-    val body = payload.toByteArray(Charsets.UTF_8)
-    val header = String.format("Start%07dEnd", body.size).toByteArray(Charsets.UTF_8)
-    out.write(header)
-    out.write(body)
-    out.flush()
-}
-
-private fun drainIncomingPackets(inp: InputStream, durationMs: Long) {
-    val end = System.currentTimeMillis() + durationMs
-    val buf = ByteArray(4096)
-    while (System.currentTimeMillis() < end) {
+    private fun drainSocketBuffer(inStr: InputStream) {
         try {
-            if (inp.available() > 0) inp.read(buf) else Thread.sleep(20)
-        } catch (_: Exception) { break }
-    }
-}
-
-private fun isSignalPacket(text: String): Boolean {
-    val clean = text.trim()
-    return clean.contains("\"strength\"") && clean.contains("\"quality\"") && !clean.contains("ServiceName") && !clean.contains("ProgramName") && !clean.contains("SatName")
-}
-
-private fun readMatchingResponse(inp: InputStream, timeoutMs: Long, predicate: (String) -> Boolean): String? {
-    val deadline = System.currentTimeMillis() + timeoutMs
-    val buffer = ByteArrayOutputStream()
-    val temp = ByteArray(8192)
-    while (System.currentTimeMillis() < deadline) {
-        try {
-            val avail = inp.available()
-            if (avail > 0) {
-                val read = inp.read(temp, 0, minOf(temp.size, avail))
-                if (read > 0) {
-                    buffer.write(temp, 0, read)
-                    val decoded = decodeGmStreamBytes(buffer.toByteArray())
-                    for (chunk in decoded) {
-                        if (predicate(chunk)) return chunk
-                    }
-                }
-            } else {
+            val dump = ByteArray(8192)
+            while (inStr.available() > 0) {
+                inStr.read(dump)
                 Thread.sleep(30)
             }
-        } catch (_: Exception) { break }
+        } catch (_: Exception) {}
     }
-    val finalChunks = decodeGmStreamBytes(buffer.toByteArray())
-    return finalChunks.firstOrNull { predicate(it) }
-}
 
-private fun decodeGmStreamBytes(rawBytes: ByteArray): List<String> {
-    val chunks = mutableListOf<String>()
-    if (rawBytes.isEmpty()) return chunks
-    val decompressed = tryZlibDecompress(rawBytes)
-    val text = String(decompressed ?: rawBytes, Charset.forName("UTF-8"))
-    val parts = text.split(Regex("Start\\d{7}"))
-    for (p in parts) {
-        val trimmed = p.trim()
-        if (trimmed.isNotEmpty()) chunks.add(trimmed)
-    }
-    return chunks
-}
+    private fun readGmScreenResponse(inStream: InputStream): String {
+        val allBytes = java.io.ByteArrayOutputStream()
+        val buf = ByteArray(16384)
+        var expectedPayloadSize = -1
+        var headerEndOffset = -1
+        var idleAttempts = 0
 
-private fun tryZlibDecompress(data: ByteArray): ByteArray? {
-    // Check if the data starts with Zlib header (78 9C, 78 DA, 78 01)
-    if (data.size >= 2 && data[0] == 0x78.toByte() && 
-        (data[1] == 0x9C.toByte() || data[1] == 0xDA.toByte() || data[1] == 0x01.toByte())) {
-        try {
-            val inflater = Inflater()
-            inflater.setInput(data)
-            val out = ByteArrayOutputStream()
-            val buf = ByteArray(4096)
-            while (!inflater.finished()) {
-                val count = inflater.inflate(buf)
-                if (count == 0) break
-                out.write(buf, 0, count)
-            }
-            inflater.end()
-            return out.toByteArray()
-        } catch (e: Exception) {
-            return null
-        }
-    }
-    return null
-}
+        while (idleAttempts < 40) {
+            try {
+                if (inStream.available() > 0) {
+                    val r = inStream.read(buf)
+                    if (r <= 0) break
+                    allBytes.write(buf, 0, r)
+                    idleAttempts = 0
 
-private fun extractJsonArray(raw: String): JSONArray? {
-    val start = raw.indexOf('[')
-    val end = raw.lastIndexOf(']')
-    if (start != -1 && end > start) {
-        try { return JSONArray(raw.substring(start, end + 1)) } catch (_: Exception) {}
-    }
-    val obj = extractFirstJsonObject(raw) ?: return null
-    val keys = listOf("list", "List", "data", "Data", "channels", "Channels", "programs", "Programs", "sats", "SatList")
-    for (k in keys) {
-        val arr = obj.optJSONArray(k)
-        if (arr != null) return arr
-    }
-    return null
-}
+                    val currentData = allBytes.toByteArray()
+                    if (expectedPayloadSize == -1) {
+                        val strCheck = String(currentData, 0, minOf(currentData.size, 128), Charsets.ISO_8859_1)
+                        val match = Regex("Start(\\d{7})End").find(strCheck)
+                        if (match != null) {
+                            expectedPayloadSize = match.groupValues[1].toIntOrNull() ?: -1
+                            headerEndOffset = match.range.last + 1
+                        }
+                    }
 
-private fun extractFirstJsonObject(raw: String): JSONObject? {
-    val start = raw.indexOf('{')
-    val end = raw.lastIndexOf('}')
-    if (start != -1 && end > start) {
-        try { return JSONObject(raw.substring(start, end + 1)) } catch (_: Exception) {}
-    }
-    return null
-}
-    private fun showSatSelectionDialog() {
-        val items = mutableListOf<String>()
-        items.add("Toutes les chaînes (${allChannels.count { it.isRadio == showRadio }})")
-        items.add("★ Favoris (${allChannels.count { it.isRadio == showRadio && it.isFav }})")
-        for (sat in satList) {
-            val count = allChannels.count { it.isRadio == showRadio && it.satIndex == sat.index }
-            items.add("${sat.name} ($count)")
-        }
-        AlertDialog.Builder(this)
-            .setTitle("Sélectionner un Satellite")
-            .setItems(items.toTypedArray()) { _, which ->
-                when (which) {
-                    0 -> { selectedSatIndex = -1; selectedSatLabel = "Toutes les chaînes" }
-                    1 -> { selectedSatIndex = -2; selectedSatLabel = "★ Favoris" }
-                    else -> { val sat = satList[which - 2]; selectedSatIndex = sat.index; selectedSatLabel = sat.name }
+                    if (expectedPayloadSize > 0 && headerEndOffset > 0) {
+                        if (currentData.size >= headerEndOffset + expectedPayloadSize) {
+                            break
+                        }
+                    }
+                } else {
+                    if (expectedPayloadSize == -1 && allBytes.size() > 32) {
+                        val strCheck = String(allBytes.toByteArray(), Charsets.ISO_8859_1)
+                        if (!strCheck.contains("Start")) break
+                    }
+                    Thread.sleep(100)
+                    idleAttempts++
                 }
-                btnSatDropdown.text = "$selectedSatLabel ▾"
-                applyChannelFilter()
-            }.show()
-    }
-
-    private fun applyChannelFilter() {
-        val query = etSearchChannel.text.toString().trim().lowercase()
-        filteredChannels.clear()
-        for (ch in allChannels) {
-            if (ch.isRadio != showRadio) continue
-            if (selectedSatIndex == -2 && !ch.isFav) continue
-            if (selectedSatIndex >= 0 && ch.satIndex != selectedSatIndex) continue
-            if (query.isNotEmpty() && !ch.name.lowercase().contains(query) && !ch.index.toString().contains(query)) continue
-            filteredChannels.add(ch)
+            } catch (_: Exception) {
+                break
+            }
         }
-        expandedChannelIndex = -1
-        channelAdapter.notifyDataSetChanged()
-    }
 
-    inner class ChannelAdapter : BaseAdapter() {
-        override fun getCount(): Int = filteredChannels.size
-        override fun getItem(position: Int): Any = filteredChannels[position]
-        override fun getItemId(position: Int): Long = position.toLong()
-        override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
-            val view = convertView ?: LayoutInflater.from(this@MainActivity).inflate(R.layout.item_channel, parent, false)
-            val ch = filteredChannels[position]
-            val rowMain = view.findViewById<LinearLayout>(R.id.rowChannelMain)
-            val tvNum = view.findViewById<TextView>(R.id.tvChannelNum)
-            val tvName = view.findViewById<TextView>(R.id.tvChannelName)
-            val tvScramble = view.findViewById<TextView>(R.id.tvBadgeScramble)
-            val tvFav = view.findViewById<TextView>(R.id.tvBadgeFav)
-            val tvLock = view.findViewById<TextView>(R.id.tvBadgeLock)
-            val tvSat = view.findViewById<TextView>(R.id.tvChannelSat)
-            val btnMore = view.findViewById<TextView>(R.id.btnChannelMore)
-            val layoutActions = view.findViewById<LinearLayout>(R.id.layoutChannelActions)
+        val raw = allBytes.toByteArray()
+        if (raw.isEmpty()) return ""
 
-            tvNum.text = ch.index.toString()
-            tvName.text = ch.name
-            tvSat.text = ch.satName
-            tvScramble.setTextColor(if (ch.isScrambled) Color.parseColor("#FACC15") else Color.parseColor("#334155"))
-            tvFav.setTextColor(if (ch.isFav) Color.parseColor("#F43F5E") else Color.parseColor("#334155"))
-            tvLock.setTextColor(if (ch.isLocked) Color.parseColor("#38BDF8") else Color.parseColor("#334155"))
+        val searchStart = if (headerEndOffset > 0) headerEndOffset else 0
 
-            val isExpanded = (expandedChannelIndex == position)
-            rowMain.setBackgroundColor(if (isExpanded) Color.parseColor("#0284C7") else Color.parseColor("#1E293B"))
-            layoutActions.visibility = if (isExpanded) View.VISIBLE else View.GONE
-
-            rowMain.setOnClickListener { switchAndPlayChannel(ch) }
-            btnMore.setOnClickListener {
-                expandedChannelIndex = if (expandedChannelIndex == position) -1 else position
-                notifyDataSetChanged()
-            }
-            view.findViewById<Button>(R.id.btnActPlay).setOnClickListener { switchAndPlayChannel(ch) }
-            view.findViewById<Button>(R.id.btnActFav).setOnClickListener {
-                sendQuickStbCommand("<Command request=\"1007\"><ServiceID>${ch.serviceId}</ServiceID></Command>")
-                Toast.makeText(this@MainActivity, "Favori updated: ${ch.name}", Toast.LENGTH_SHORT).show()
-            }
-            view.findViewById<Button>(R.id.btnActRename).setOnClickListener { showRenameChannelDialog(ch) }
-            view.findViewById<Button>(R.id.btnActDelete).setOnClickListener {
-                AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Effacer la chaîne")
-                    .setMessage("Supprimer ${ch.name} ?")
-                    .setPositiveButton("Oui") { _, _ ->
-                        sendQuickStbCommand("<Command request=\"1005\"><ServiceID>${ch.serviceId}</ServiceID></Command>")
-                        allChannels.remove(ch)
-                        applyChannelFilter()
-                    }.setNegativeButton("Non", null).show()
-            }
-            view.findViewById<Button>(R.id.btnActLock).setOnClickListener {
-                sendQuickStbCommand("<Command request=\"1006\"><ServiceID>${ch.serviceId}</ServiceID></Command>")
-                Toast.makeText(this@MainActivity, "Verrouillage updated: ${ch.name}", Toast.LENGTH_SHORT).show()
-            }
-            return view
-        }
-    }
-
-    private fun switchAndPlayChannel(ch: ChannelItem) {
-        Toast.makeText(this, "Zapping: ${ch.name}", Toast.LENGTH_SHORT).show()
-        executor.execute {
-            sendQuickStbCommandSync("<Command request=\"1002\"><ServiceID>${ch.serviceId}</ServiceID></Command>")
-            val streamUrl = "http://$currentIp:8080/stream?ServiceID=${ch.serviceId}"
-            runOnUiThread {
+        for (i in searchStart until raw.size - 1) {
+            if (raw[i] == 0x78.toByte() && (
+                        raw[i + 1] == 0x9C.toByte() ||
+                        raw[i + 1] == 0xDA.toByte() ||
+                        raw[i + 1] == 0x01.toByte() ||
+                        raw[i + 1] == 0x5E.toByte()
+                        )) {
                 try {
-                    val intent = Intent(Intent.ACTION_VIEW)
-                    intent.setDataAndType(Uri.parse(streamUrl), "video/*")
-                    startActivity(Intent.createChooser(intent, "Play ${ch.name} with..."))
+                    val inflater = java.util.zip.Inflater()
+                    inflater.setInput(raw, i, raw.size - i)
+                    val out = java.io.ByteArrayOutputStream()
+                    val tmp = ByteArray(8192)
+                    while (!inflater.finished()) {
+                        val count = inflater.inflate(tmp)
+                        if (count == 0) {
+                            if (inflater.needsInput()) break
+                        }
+                        out.write(tmp, 0, count)
+                    }
+                    inflater.end()
+                    val unzipped = out.toString("UTF-8")
+                    if (unzipped.isNotEmpty()) return unzipped
                 } catch (_: Exception) {}
             }
         }
+        return if (searchStart < raw.size) String(raw, searchStart, raw.size - searchStart, Charsets.UTF_8) else String(raw, Charsets.UTF_8)
     }
 
-    private fun showRenameChannelDialog(ch: ChannelItem) {
-        val input = EditText(this)
-        input.setText(ch.name)
+    private fun connectAndFetchChannels(rawIp: String) {
+        val parts = rawIp.trim().split(":")
+        val ip = parts[0]
+        val port = parts.getOrNull(1)?.toIntOrNull() ?: 20000
+        currentIp = ip
+        updateStatus("Connecting to $ip:$port...")
+
+        scope.launch {
+            try {
+                tcpSocket?.close()
+                val s = Socket()
+                s.connect(InetSocketAddress(ip, port), 5000)
+                s.soTimeout = 5000
+                tcpSocket = s
+                outputStream = s.getOutputStream()
+                inputStream = s.getInputStream()
+
+                val out = outputStream!!
+                val inStr = inputStream!!
+
+                out.write(wrapGmScreenPacket("{\"request\":\"998\",\"ClientType\":\"0\",\"MobileType\":\"Android\",\"AppVersion\":\"1.0\"}"))
+                out.flush()
+                delay(300)
+                drainSocketBuffer(inStr)
+
+                out.write(wrapGmScreenPacket("{\"request\":\"15\"}"))
+                out.flush()
+                val handshakeReply = readGmScreenResponse(inStr)
+                drainSocketBuffer(inStr)
+                val deviceName = Regex("\"ProductName\"\\s*:\\s*\"([^\"]+)\"").find(handshakeReply)?.groupValues?.get(1) ?: "ALi STB"
+                updateStatus("Connected ($deviceName) • Fetching Satellites...")
+
+                val satMap = mutableMapOf<String, String>()
+                out.write(wrapGmScreenPacket("{\"request\":\"22\"}"))
+                out.flush()
+                delay(400)
+                val satReply = readGmScreenResponse(inStr)
+                drainSocketBuffer(inStr)
+
+                val satRegex = Regex("\\{[^{}]*\"SatName\"[^{}]*\\}")
+                for (m in satRegex.findAll(satReply)) {
+                    val sObj = m.value
+                    val sIdx = Regex("\"SatIndex\"\\s*:\\s*\"?([^\",}]+)\"?").find(sObj)?.groupValues?.get(1)?.trim() ?: ""
+                    val sName = Regex("\"SatName\"\\s*:\\s*\"([^\"]+)\"").find(sObj)?.groupValues?.get(1)?.trim() ?: ""
+                    if (sIdx.isNotEmpty() && sName.isNotEmpty()) {
+                        satMap[sIdx] = sName
+                    }
+                }
+                discoveredSatellites.clear()
+                discoveredSatellites.addAll(satMap.values.distinct().sorted())
+                updateStatus("Found ${satMap.size} Satellites • Loading Channels...")
+
+                val fetchedList = mutableListOf<DvbChannel>()
+                var fromIndex = 0
+                val step = 100
+                var hasMore = true
+                var lastRawDebug = ""
+                val tvStateVal = if (isRadioMode) 1 else 0
+
+                while (hasMore && fromIndex < 6000) {
+                    drainSocketBuffer(inStr)
+                    val cmd = "{\"request\":\"0\",\"TvState\":$tvStateVal,\"FromIndex\":$fromIndex,\"ToIndex\":${fromIndex + step - 1}}"
+                    out.write(wrapGmScreenPacket(cmd))
+                    out.flush()
+                    delay(350)
+
+                    val chReply = readGmScreenResponse(inStr)
+                    if (chReply.isEmpty()) break
+                    lastRawDebug = chReply
+
+                    val batch = parseGmScreenChannels(chReply, fetchedList.size, satMap)
+                    if (batch.isEmpty()) {
+                        hasMore = false
+                    } else {
+                        fetchedList.addAll(batch)
+                        updateStatus("Loaded ${fetchedList.size} Channels ($deviceName)...")
+                        if (batch.size < step) {
+                            hasMore = false
+                        } else {
+                            fromIndex += step
+                        }
+                    }
+                }
+
+                withContext(Dispatchers.Main) {
+                    allChannels.clear()
+                    allChannels.addAll(fetchedList)
+                    applyChannelFilters(findViewById<EditText>(R.id.etSearchChannel).text.toString())
+
+                    if (fetchedList.isNotEmpty()) {
+                        updateStatus("Ready: ${fetchedList.size} Channels • ${satMap.size} Satellites ($deviceName)")
+                    } else {
+                        updateStatus("Connected ($deviceName) • ${satMap.size} Sats • 0 Ch. Raw: ${lastRawDebug.take(140)}")
+                    }
+                }
+            } catch (e: Exception) {
+                updateStatus("Connection Error: ${e.message}")
+            }
+        }
+    }
+
+    private fun parseGmScreenChannels(data: String, startOffset: Int, satMap: Map<String, String> = emptyMap()): List<DvbChannel> {
+    val list = mutableListOf<DvbChannel>()
+    
+    // Try XML extraction first (Ali/GX receivers reply with XML inside Zlib)
+    try {
+        val nameRegex = Regex("<(?:ServiceName|ProgramName|ChannelName|Name)>(.*?)</(?:ServiceName|ProgramName|ChannelName|Name)>", RegexOption.IGNORE_CASE)
+        val idRegex = Regex("<(?:ServiceID|ProgramId|ChannelID)>(.*?)</(?:ServiceID|ProgramId|ChannelID)>", RegexOption.IGNORE_CASE)
+        val satRegex = Regex("<(?:SatIndex|SatelliteIndex|SatID)>(.*?)</(?:SatIndex|SatelliteIndex|SatID)>", RegexOption.IGNORE_CASE)
+        val freqRegex = Regex("<(?:Frequency|Freq|TPFreq)>(.*?)</(?:Frequency|Freq|TPFreq)>", RegexOption.IGNORE_CASE)
+        val polRegex = Regex("<(?:Polarization|Pol|Polar)>(.*?)</(?:Polarization|Pol|Polar)>", RegexOption.IGNORE_CASE)
+        val symRegex = Regex("<(?:SymbolRate|Sym|SR)>(.*?)</(?:SymbolRate|Sym|SR)>", RegexOption.IGNORE_CASE)
+        val vPidRegex = Regex("<(?:VideoPID|VPid)>(.*?)</(?:VideoPID|VPid)>", RegexOption.IGNORE_CASE)
+        val aPidRegex = Regex("<(?:AudioPID|APid)>(.*?)</(?:AudioPID|APid)>", RegexOption.IGNORE_CASE)
+        val cryptRegex = Regex("<(?:Scramble|Crypt|IsCrypt)>(.*?)</(?:Scramble|Crypt|IsCrypt)>", RegexOption.IGNORE_CASE)
+        
+        val names = nameRegex.findAll(data).map { it.groupValues[1].trim() }.toList()
+        val ids = idRegex.findAll(data).map { it.groupValues[1].trim() }.toList()
+        val sats = satRegex.findAll(data).map { it.groupValues[1].trim() }.toList()
+        val freqs = freqRegex.findAll(data).map { it.groupValues[1].trim() }.toList()
+        val pols = polRegex.findAll(data).map { it.groupValues[1].trim() }.toList()
+        val syms = symRegex.findAll(data).map { it.groupValues[1].trim() }.toList()
+        val vPids = vPidRegex.findAll(data).map { it.groupValues[1].trim() }.toList()
+        val aPids = aPidRegex.findAll(data).map { it.groupValues[1].trim() }.toList()
+        val crypts = cryptRegex.findAll(data).map { it.groupValues[1].trim() }.toList()
+
+        if (names.isNotEmpty()) {
+            var idx = startOffset + 1
+            for (i in names.indices) {
+                val name = names[i]
+                if (name.isEmpty()) continue
+                
+                val sid = if (i < ids.size) ids[i] else "$idx"
+                val satIdx = if (i < sats.size) sats[i] else ""
+                val satName = satMap[satIdx] ?: if (satIdx.isNotEmpty()) "Sat #$satIdx" else "Satellite"
+                val freq = if (i < freqs.size) freqs[i] else ""
+                val pol = if (i < pols.size) pols[i] else ""
+                val sym = if (i < syms.size) syms[i] else ""
+                val vPid = if (i < vPids.size) vPids[i] else "0"
+                val aPid = if (i < aPids.size) aPids[i] else "0"
+                val crypt = if (i < crypts.size) crypts[i] == "1" else false
+                val isHd = name.contains("HD", ignoreCase = true)
+
+                list.add(
+                    DvbChannel(idx++, name, satName, sid, satName, freq, pol, sym, "DVB-S2", "8PSK", "3/4", crypt, isHd, vPid, aPid)
+                )
+            }
+            return list // If we found XML channels, return them
+        }
+    } catch (_: Exception) {}
+
+    // Fallback to JSON if XML fails
+    try {
+        val objRegex = Regex("\\{[^{}]*\"(ServiceName|ProgramName|ChannelName|Name)\"[^{}]*\\}")
+        var idx = startOffset + 1
+        for (m in objRegex.findAll(data)) {
+            val obj = m.value
+            fun getJsonVal(vararg keys: String): String {
+                for (k in keys) {
+                    val v = Regex("\"$k\"\\s*:\\s*\"?([^\",}]+)\"?").find(obj)?.groupValues?.get(1)?.trim()
+                    if (!v.isNullOrEmpty()) return v
+                }
+                return ""
+            }
+            val name = getJsonVal("ServiceName", "ProgramName", "ChannelName", "Name")
+            if (name.isEmpty()) continue
+            
+            val sid = getJsonVal("ServiceID", "ProgramId", "ServiceIndex", "ProgramIndex").ifEmpty { "$idx" }
+            val satIdx = getJsonVal("SatIndex", "SatId")
+            val sat = getJsonVal("SatName").ifEmpty { satMap[satIdx] ?: "Satellite" }
+            val freq = getJsonVal("Frequency", "Freq", "TPFreq")
+            val pol = getJsonVal("Polarization", "Pol", "Polar")
+            val sym = getJsonVal("SymbolRate", "Sym", "SR")
+            val vPid = getJsonVal("VideoPID", "VPid").ifEmpty { "0" }
+            val aPid = getJsonVal("AudioPID", "APid").ifEmpty { "0" }
+            val crypt = getJsonVal("Scramble", "Crypt", "IsCrypt") == "1"
+            val isHd = getJsonVal("HD", "IsHD") == "1" || name.contains("HD", ignoreCase = true)
+
+            list.add(DvbChannel(idx++, name, sat, sid, sat, freq, pol, sym, "DVB-S2", "8PSK", "3/4", crypt, isHd, vPid, aPid))
+        }
+    } catch (_: Exception) {}
+    
+    return list
+    }
+
+    private fun showPlayerDialog(ch: DvbChannel) {
+        val polLower = if (ch.pol.lowercase().startsWith("v")) "v" else "h"
+        val streamUrl = if (ch.freq.isNotEmpty() && ch.vPid != "0") {
+            "rtsp://$currentIp:554/?alisatid=1&freq=${ch.freq}&pol=$polLower&msys=dvbs2&mtype=8psk&ro=0.35&plts=on&sr=${ch.symRate.ifEmpty { "27500" }}&fec=1&vpid=${ch.vPid}&apid=${ch.aPid}&pids=${ch.vPid},${ch.aPid}"
+        } else {
+            "http://$currentIp:8000/stream?sid=${ch.serviceId}"
+        }
+
+        val options = arrayOf(
+            "▶ Play (Play Inside App)",
+            "📱 Open in VLC App",
+            "📱 Open in MX Player",
+            "✏️ Rename (Rename on STB)",
+            "🗑️ Delete (Delete from STB)",
+            "🔒 Verrouiller / Déverrouiller (Lock)",
+            "📋 Copy Stream URL"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("${ch.index}. ${ch.rawIdent} (${ch.satName})")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> playInsideApp(ch, streamUrl)
+                    1 -> openExternal(streamUrl, "org.videolan.vlc", ch.rawIdent)
+                    2 -> openExternal(streamUrl, "com.mxtech.videoplayer.ad", ch.rawIdent)
+                    3 -> showRenameChannelDialog(ch)
+                    4 -> {
+                        scope.launch {
+                            sendRawXml("{\"request\":\"1005\",\"TvState\":\"${if (isRadioMode) 1 else 0}\",\"ProgramId\":\"${ch.serviceId}\"}")
+                        }
+                        allChannels.remove(ch)
+                        filteredChannels.remove(ch)
+                        adapter.notifyDataSetChanged()
+                        Toast.makeText(this, "Deleted on STB: ${ch.rawIdent}", Toast.LENGTH_SHORT).show()
+                    }
+                    5 -> {
+                        scope.launch {
+                            sendRawXml("{\"request\":\"1006\",\"TvState\":\"${if (isRadioMode) 1 else 0}\",\"ProgramId\":\"${ch.serviceId}\"}")
+                        }
+                        Toast.makeText(this, "Toggled Lock on STB: ${ch.rawIdent}", Toast.LENGTH_SHORT).show()
+                    }
+                    6 -> copyText(streamUrl, "Stream URL Copied!")
+                }
+            }
+            .show()
+    }
+
+    private fun showRenameChannelDialog(ch: DvbChannel) {
+        val input = EditText(this).apply { setText(ch.rawIdent) }
         AlertDialog.Builder(this)
             .setTitle("Renommer la chaîne")
             .setView(input)
             .setPositiveButton("OK") { _, _ ->
                 val newName = input.text.toString().trim()
                 if (newName.isNotEmpty()) {
-                    sendQuickStbCommand("<Command request=\"1004\"><ServiceID>${ch.serviceId}</ServiceID><ServiceName>$newName</ServiceName></Command>")
+                    scope.launch {
+                        sendRawXml("{\"request\":\"1004\",\"TvState\":\"${if (isRadioMode) 1 else 0}\",\"ProgramId\":\"${ch.serviceId}\",\"ProgramName\":\"$newName\"}")
+                    }
                     val idx = allChannels.indexOf(ch)
-                    if (idx != -1) {
-                        allChannels[idx] = ch.copy(name = newName)
-                        applyChannelFilter()
+                    if (idx >= 0) {
+                        allChannels[idx] = ch.copy(rawIdent = newName)
+                        applyChannelFilters(findViewById<EditText>(R.id.etSearchChannel).text.toString())
                     }
                 }
-            }.setNegativeButton("Annuler", null).show()
+            }
+            .setNegativeButton("Annuler", null)
+            .show()
     }
 
-    private fun setupRemoteButtons() {
-        val keyMap = mapOf(
-            R.id.btnPower to 10, R.id.btnMute to 11, R.id.btnMenu to 12, R.id.btnExit to 13,
-            R.id.btnUp to 14, R.id.btnDown to 15, R.id.btnLeft to 16, R.id.btnRight to 17,
-            R.id.btnOk to 18, R.id.btnVolUp to 19, R.id.btnVolDown to 20, R.id.btnChUp to 21,
-            R.id.btnChDown to 22, R.id.btnInfo to 23, R.id.btnAudio to 24, R.id.btnFavRemote to 25
-        )
-        for ((viewId, keyCode) in keyMap) {
-            findViewById<View>(viewId)?.setOnClickListener {
-                sendQuickStbCommand("<Command request=\"1003\"><KeyCode>$keyCode</KeyCode></Command>")
-            }
+    private fun playInsideApp(ch: DvbChannel, url: String) {
+        playerContainer.visibility = View.VISIBLE
+        layoutInfoBar.visibility = View.VISIBLE
+        tvInfoChannelName.text = ch.rawIdent
+        tvBadgeCrypt.text = if (ch.isScrambled) "CRYPT" else "FTA"
+        tvInfoSatFreq.text = "${ch.satName} • ${ch.freq} ${ch.pol}"
+        tvInfoPids.text = "V:${ch.vPid} A:${ch.aPid}"
+
+        scope.launch {
+            sendRawXml("{\"request\":\"1009\",\"TvState\":\"${if (isRadioMode) 1 else 0}\",\"ProgramId\":\"${ch.serviceId}\"}")
+        }
+
+        try {
+            mediaPlayer?.stop()
+            val media = Media(libVlc, Uri.parse(url))
+            mediaPlayer?.media = media
+            media.release()
+            mediaPlayer?.play()
+        } catch (e: Exception) {
+            updateStatus("Player Error: ${e.message}")
         }
     }
 
-    private fun startSatfinderPolling() {
-        executor.execute {
-            while (satfinderRunning && isConnected) {
-                synchronized(socketLock) {
-                    var s: Socket? = null
-                    try {
-                        s = Socket()
-                        s.connect(InetSocketAddress(currentIp, currentPort), 2000)
-                        s.soTimeout = 1500
-                        val out = s.getOutputStream()
-                        val inp = s.getInputStream()
-                        sendGmCommand(out, "<Command request=\"1010\"></Command>")
-                        val raw = readMatchingResponse(inp, 1200) { it.contains("strength") || it.contains("quality") }
-                        if (raw != null) {
-                            val arr = extractJsonArray(raw)
-                            val obj = arr?.optJSONObject(0) ?: extractFirstJsonObject(raw)
-                            if (obj != null) {
-                                val str = obj.optInt("strength", 0)
-                                val qua = obj.optInt("quality", 0)
-                                runOnUiThread {
-                                    pbStrength.progress = str
-                                    pbQuality.progress = qua
-                                    tvStrengthPct.text = "$str%"
-                                    tvQualityPct.text = "$qua%"
-                                    tvSatSignalInfo.text = "Signal: Strength $str% | Quality $qua%"
-                                }
-                            }
+    private fun startTelemetryMonitor() {
+        monitorJob?.cancel()
+        monitorJob = scope.launch {
+            var lastRxBytes = TrafficStats.getTotalRxBytes()
+            var lastTimeMs = System.currentTimeMillis()
+            while (isActive) {
+                try {
+                    val nowRx = TrafficStats.getTotalRxBytes()
+                    val nowMs = System.currentTimeMillis()
+
+                    val diffSec = (nowMs - lastTimeMs) / 1000.0
+                    val mbps = if (diffSec > 0 && nowRx >= lastRxBytes) ((nowRx - lastRxBytes) * 8.0) / (diffSec * 1_000_000.0) else 0.0
+                    lastRxBytes = nowRx; lastTimeMs = nowMs
+
+                    sendRawXml("{\"request\":\"1001\"}")
+                    delay(250)
+                    var activeSat = ""
+                    var activeFreqInfo = ""
+                    val inStr = inputStream
+                    if (inStr != null && inStr.available() > 0) {
+                        val infoReply = readGmScreenResponse(inStr)
+                        val chName = Regex("\"(ServiceName|ProgramName)\"\\s*:\\s*\"([^\"]+)\"").find(infoReply)?.groupValues?.get(2) ?: ""
+                        val satName = Regex("\"SatName\"\\s*:\\s*\"([^\"]+)\"").find(infoReply)?.groupValues?.get(1) ?: ""
+                        val freq = Regex("\"(Frequency|Freq)\"\\s*:\\s*\"?(\\d+)\"?").find(infoReply)?.groupValues?.get(2) ?: ""
+                        val pol = Regex("\"(Polarization|Pol)\"\\s*:\\s*\"?([^\"]+)\"?").find(infoReply)?.groupValues?.get(2) ?: ""
+                        val sym = Regex("\"(SymbolRate|Sym)\"\\s*:\\s*\"?(\\d+)\"?").find(infoReply)?.groupValues?.get(2) ?: ""
+
+                        if (satName.isNotEmpty() || chName.isNotEmpty()) {
+                            activeSat = "Satellite: ${satName.ifEmpty { "Active Tuner" }} (${chName.ifEmpty { "Live" }})"
                         }
-                    } catch (_: Exception) {} finally {
-                        try { s?.close() } catch (_: Exception) {}
+                        if (freq.isNotEmpty()) {
+                            activeFreqInfo = "TP: $freq MHz • $pol • SR $sym"
+                        }
                     }
-                }
-                try { Thread.sleep(900) } catch (_: Exception) { break }
+
+                    sendRawXml("{\"request\":\"403\"}")
+                    delay(300)
+
+                    var strength = 0
+                    var quality = 0
+                    if (inStr != null && inStr.available() > 0) {
+                        val reply = readGmScreenResponse(inStr)
+                        strength = Regex("\"Strength\"\\s*:\\s*\"?(\\d+)\"?", RegexOption.IGNORE_CASE).find(reply)?.groupValues?.get(1)?.toIntOrNull()
+                            ?: extractTagInt(reply, "SignalStrength") ?: 0
+                        quality = Regex("\"Quality\"\\s*:\\s*\"?(\\d+)\"?", RegexOption.IGNORE_CASE).find(reply)?.groupValues?.get(1)?.toIntOrNull()
+                            ?: extractTagInt(reply, "SignalQuality") ?: 0
+                    }
+
+                    val dbStr = String.format(Locale.US, "%.1f dB", quality * 0.175)
+                    val bitrateStr = String.format(Locale.US, "Bitrate: %.2f Mbps • %s", mbps, videoResInfo)
+
+                    if (isBeepActive && quality > 30) {
+                        try { toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP, 80) } catch (_: Throwable) {}
+                    }
+
+                    withContext(Dispatchers.Main) {
+                        pbStrength.progress = strength; tvStrengthVal.text = "$strength%"
+                        pbQuality.progress = quality; tvQualityVal.text = "$quality%"
+                        tvInfoDb.text = dbStr; tvInfoBitrate.text = bitrateStr
+
+                        if (activeSat.isNotEmpty()) tvSatFinderSatName.text = activeSat
+                        if (activeFreqInfo.isNotEmpty()) tvSatFinderFreq.text = activeFreqInfo
+                        tvSatFinderDb.text = dbStr
+
+                        pbSatSignal.progress = strength
+                        pbSatSignal.progressTintList = ColorStateList.valueOf(0xFFEF4444.toInt())
+                        tvSatStrengthVal.text = "$strength%"
+
+                        pbSatQuality.progress = quality
+                        pbSatQuality.progressTintList = ColorStateList.valueOf(0xFF22C55E.toInt())
+                        tvSatQualityVal.text = "$quality%"
+
+                        val dbColor = when {
+                            quality >= 65 -> 0xFF22C55E.toInt()
+                            quality >= 40 -> 0xFFEAB308.toInt()
+                            else -> 0xFFEF4444.toInt()
+                        }
+                        tvSatFinderDb.setTextColor(dbColor)
+                        tvInfoDb.setTextColor(dbColor)
+                    }
+                } catch (_: Throwable) {}
+                delay(1000)
             }
         }
     }
 
-    private fun sendQuickStbCommand(jsonCmd: String) {
-        if (!isConnected) return
-        executor.execute { sendQuickStbCommandSync(jsonCmd) }
+    private fun extractTagInt(xml: String, tag: String): Int? =
+        Regex("<$tag>(\\d+)</$tag>", RegexOption.IGNORE_CASE).find(xml)?.groupValues?.get(1)?.toIntOrNull()
+
+    private fun openExternal(url: String, pkg: String, title: String) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(Uri.parse(url), "video/*")
+                setPackage(pkg)
+                putExtra("title", title)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            val fallback = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(Uri.parse(url), "video/*")
+                putExtra("title", title)
+            }
+            startActivity(Intent.createChooser(fallback, "Select Video Player"))
+        }
     }
 
-    private fun sendQuickStbCommandSync(jsonCmd: String) {
-        synchronized(socketLock) {
-            var s: Socket? = null
-            try {
-                s = Socket()
-                s.connect(InetSocketAddress(currentIp, currentPort), 2500)
-                sendGmCommand(s.getOutputStream(), jsonCmd)
-            } catch (_: Exception) {} finally {
-                try { s?.close() } catch (_: Exception) {}
+    private fun sendRawXml(cmd: String) {
+        try {
+            val out = outputStream ?: return
+            val finalCmd = if (cmd.contains("request=\"1040\"")) {
+                val key = Regex("<key>(\\d+)</key>").find(cmd)?.groupValues?.get(1) ?: "1"
+                "{\"request\":\"1040\",\"array\":[{\"KeyValue\":\"$key\"}]}"
+            } else {
+                cmd
             }
-        }
+            out.write(wrapGmScreenPacket(finalCmd))
+            out.flush()
+        } catch (_: Throwable) {}
+    }
+
+    private fun updateStatus(msg: String) {
+        runOnUiThread { tvStatus.text = msg }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        satfinderRunning = false
-        executor.shutdownNow()
+        monitorJob?.cancel()
+        scope.cancel()
+        try { tcpSocket?.close() } catch (_: Throwable) {}
+        try { mediaPlayer?.release(); libVlc?.release() } catch (_: Throwable) {}
+        try { toneGenerator?.release() } catch (_: Throwable) {}
     }
 }
