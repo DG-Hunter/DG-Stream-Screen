@@ -305,8 +305,7 @@ class MainActivity : AppCompatActivity() {
         bindKey(R.id.btnMenu, 26); bindKey(R.id.btnExit, 27); bindKey(R.id.btnInfo, 28); bindKey(R.id.btnPage, 25)
         bindKey(R.id.btnUp, 21); bindKey(R.id.btnDown, 22); bindKey(R.id.btnLeft, 23); bindKey(R.id.btnRight, 24); bindKey(R.id.btnOk, 25)
         bindKey(R.id.btnVolUp, 17); bindKey(R.id.btnVolDown, 18); bindKey(R.id.btnChUp, 19); bindKey(R.id.btnChDown, 20)
-        bindKey(R.id.btnRed, 33); bindKey(R.id.btnGreen, 34); bindKey(R.id.btnYellow, 35); bindKey(R.id.btnBlue, 36)
-        bindKey(R.id.btnRew, 41); bindKey(R.id.btnPlayPause, 42); bindKey(R.id.btnStopMedia, 43); bindKey(R.id.btnFwd, 44); bindKey(R.id.btnRec, 45)
+       
     }
 
     private fun applyChannelFilters(query: String) {
@@ -331,9 +330,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun toggleFullscreen() {
         isFullscreen = !isFullscreen
-        val header = findViewById<LinearLayout>(R.id.headerBar)
-        val connect = findViewById<LinearLayout>(R.id.connectBar)
-        val tabs = findViewById<LinearLayout>(R.id.tabBar)
         val params = playerContainer.layoutParams as LinearLayout.LayoutParams
         if (isFullscreen) {
             header.visibility = View.GONE; connect.visibility = View.GONE
