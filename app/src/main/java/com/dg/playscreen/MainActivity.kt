@@ -441,21 +441,23 @@ private fun decodeGmStreamBytes(rawBytes: ByteArray): List<String> {
 }
 
 private fun tryZlibDecompress(data: ByteArray): ByteArray? {
-    for (offset in 0 until minOf(data.size - 2, 32)) {
-        if (data[offset] == 0x78.toByte() && (data[offset + 1] == 0x9C.toByte() || data[offset + 1] == 0xDA.toByte() || data[offset + 1] == 0x01.toByte())) {
-            try {
-                val inflater = Inflater()
-                inflater.setInput(data, offset, data.size - offset)
-                val out = ByteArrayOutputStream()
-                val buf = ByteArray(4096)
-                while (!inflater.finished()) {
-                    val count = inflater.inflate(buf)
-                    if (count == 0) break
-                    out.write(buf, 0, count)
-                }
-                inflater.end()
-                if (out.size() > 0) return out.toByteArray()
-            } catch (_: Exception) {}
+    // Check if the data starts with Zlib header (78 9C, 78 DA, 78 01)
+    if (data.size >= 2 && data[0] == 0x78.toByte() && 
+        (data[1] == 0x9C.toByte() || data[1] == 0xDA.toByte() || data[1] == 0x01.toByte())) {
+        try {
+            val inflater = Inflater()
+            inflater.setInput(data)
+            val out = ByteArrayOutputStream()
+            val buf = ByteArray(4096)
+            while (!inflater.finished()) {
+                val count = inflater.inflate(buf)
+                if (count == 0) break
+                out.write(buf, 0, count)
+            }
+            inflater.end()
+            return out.toByteArray()
+        } catch (e: Exception) {
+            return null
         }
     }
     return null
