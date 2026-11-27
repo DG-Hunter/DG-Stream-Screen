@@ -312,7 +312,15 @@ private fun discoverStbDevices() {
 
                     drainIncomingPackets(inp, 250)
 
-                    sendGmCommand(out, "{\"request\":\"998\"}")
+                    // 1. Send Handshake (XML Format as seen in PCAPdroid)
+val handshakeCmd = "<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><Command request=\"998\"><uuid>3aee69e8-2d6c-45f7-9fde-e1584dfc8108-02:00:00:00:00:00</uuid><data>PGN528</data></Command>"
+sendGmCommand(out, handshakeCmd)
+val handshakeResponse = readMatchingResponse(inp, 2500) { true }
+
+// 2. Send the actual channel request seen in PCAPdroid
+drainIncomingPackets(inp, 200)
+sendGmCommand(out, "{\"request\":\"20\"}")
+val channelsRaw = readMatchingResponse(inp, 3000) { true }
                     val handshakeJson = readMatchingResponse(inp, 2500) { raw ->
                         raw.contains("ProductName") || raw.contains("SoftwareVersion") || raw.contains("Platform") || raw.contains("{")
                     }
@@ -513,11 +521,12 @@ private fun discoverStbDevices() {
 
     // ==================== 3. Smart Socket Protocol & Zlib ====================
     private fun sendGmCommand(out: OutputStream, jsonPayload: String) {
-        val body = jsonPayload.toByteArray(Charsets.UTF_8)
-        val header = String.format("Start%07d", body.size).toByteArray(Charsets.UTF_8)
-        out.write(header)
-        out.write(body)
-        out.flush()
+    val body = jsonPayload.toByteArray(Charsets.UTF_8)
+    // The protocol expects Start + 7 digits length + End
+    val header = String.format("Start%07dEnd", body.size).toByteArray(Charsets.UTF_8)
+    out.write(header)
+    out.write(body)
+    out.flush()
     }
 
     private fun drainIncomingPackets(inp: InputStream, durationMs: Long) {
