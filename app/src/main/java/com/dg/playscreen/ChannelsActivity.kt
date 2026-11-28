@@ -1,5 +1,6 @@
 package com.dg.playscreen
-import org.json.JSONObject
+
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
@@ -130,11 +131,14 @@ class ChannelsActivity : AppCompatActivity() {
         btnSelectSatFilter.setOnClickListener {
             val options = mutableListOf("Toutes les chaînes (All)")
             options.addAll(discoveredSatellites)
-            AlertDialog.Builder(this).setTitle("Sélectionner un Satellite").setItems(options.toTypedArray()) { _, which ->
-                selectedSatFilter = if (which == 0) "ALL" else options[which]
-                btnSelectSatFilter.text = "$selectedSatFilter ▾"
-                applyChannelFilters(etSearch.text.toString())
-            }.show()
+            AlertDialog.Builder(this)
+                .setTitle("Sélectionner un Satellite")
+                .setItems(options.toTypedArray()) { _, which ->
+                    selectedSatFilter = if (which == 0) "ALL" else options[which]
+                    btnSelectSatFilter.text = "$selectedSatFilter ▾"
+                    applyChannelFilters(etSearch.text.toString())
+                }
+                .show()
         }
 
         etSearch.addTextChangedListener(object : TextWatcher {
