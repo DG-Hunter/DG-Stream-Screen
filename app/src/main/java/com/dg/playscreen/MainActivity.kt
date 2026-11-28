@@ -940,6 +940,11 @@ class MainActivity : AppCompatActivity() {
         runOnUiThread { tvStatus.text = msg }
     }
 
+private fun bindKey(buttonId: Int, keyCode: Int) {
+    findViewById<Button>(buttonId).setOnClickListener {
+        scope.launch { sendRawXml("<Command request=\"1040\"><key>$keyCode</key></Command>") }
+    }
+}
     override fun onDestroy() {
         super.onDestroy()
         monitorJob?.cancel()
