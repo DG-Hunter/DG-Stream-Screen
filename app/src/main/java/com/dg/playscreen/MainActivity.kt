@@ -659,85 +659,45 @@ private fun toggleFullscreen() {
 
     private fun parseGmScreenChannels(data: String, startOffset: Int, satMap: Map<String, String> = emptyMap()): List<DvbChannel> {
     val list = mutableListOf<DvbChannel>()
+    var idx = startOffset + 1
     
-    // Try XML extraction first (Ali/GX receivers reply with XML inside Zlib)
     try {
-        val nameRegex = Regex("<(?:ServiceName|ProgramName|ChannelName|Name)>(.*?)</(?:ServiceName|ProgramName|ChannelName|Name)>", RegexOption.IGNORE_CASE)
-        val idRegex = Regex("<(?:ServiceID|ProgramId|ChannelID)>(.*?)</(?:ServiceID|ProgramId|ChannelID)>", RegexOption.IGNORE_CASE)
-        val satRegex = Regex("<(?:SatIndex|SatelliteIndex|SatID)>(.*?)</(?:SatIndex|SatelliteIndex|SatID)>", RegexOption.IGNORE_CASE)
-        val freqRegex = Regex("<(?:Frequency|Freq|TPFreq)>(.*?)</(?:Frequency|Freq|TPFreq)>", RegexOption.IGNORE_CASE)
-        val polRegex = Regex("<(?:Polarization|Pol|Polar)>(.*?)</(?:Polarization|Pol|Polar)>", RegexOption.IGNORE_CASE)
-        val symRegex = Regex("<(?:SymbolRate|Sym|SR)>(.*?)</(?:SymbolRate|Sym|SR)>", RegexOption.IGNORE_CASE)
-        val vPidRegex = Regex("<(?:VideoPID|VPid)>(.*?)</(?:VideoPID|VPid)>", RegexOption.IGNORE_CASE)
-        val aPidRegex = Regex("<(?:AudioPID|APid)>(.*?)</(?:AudioPID|APid)>", RegexOption.IGNORE_CASE)
-        val cryptRegex = Regex("<(?:Scramble|Crypt|IsCrypt)>(.*?)</(?:Scramble|Crypt|IsCrypt)>", RegexOption.IGNORE_CASE)
+        // Find all "ServiceName": "..." in the text, and try to get the ServiceID before it
+        val nameRegex = Regex("\"ServiceName\"\\s*:\\s*\"([^\"]+)\"")
+        val idRegex = Regex("\"ServiceID\"\\s*:\\s*\"?([0-9]+)\"?")
         
         val names = nameRegex.findAll(data).map { it.groupValues[1].trim() }.toList()
         val ids = idRegex.findAll(data).map { it.groupValues[1].trim() }.toList()
-        val sats = satRegex.findAll(data).map { it.groupValues[1].trim() }.toList()
-        val freqs = freqRegex.findAll(data).map { it.groupValues[1].trim() }.toList()
-        val pols = polRegex.findAll(data).map { it.groupValues[1].trim() }.toList()
-        val syms = symRegex.findAll(data).map { it.groupValues[1].trim() }.toList()
-        val vPids = vPidRegex.findAll(data).map { it.groupValues[1].trim() }.toList()
-        val aPids = aPidRegex.findAll(data).map { it.groupValues[1].trim() }.toList()
-        val crypts = cryptRegex.findAll(data).map { it.groupValues[1].trim() }.toList()
 
-        if (names.isNotEmpty()) {
-            var idx = startOffset + 1
-            for (i in names.indices) {
-                val name = names[i]
-                if (name.isEmpty()) continue
-                
-                val sid = if (i < ids.size) ids[i] else "$idx"
-                val satIdx = if (i < sats.size) sats[i] else ""
-                val satName = satMap[satIdx] ?: if (satIdx.isNotEmpty()) "Sat #$satIdx" else "Satellite"
-                val freq = if (i < freqs.size) freqs[i] else ""
-                val pol = if (i < pols.size) pols[i] else ""
-                val sym = if (i < syms.size) syms[i] else ""
-                val vPid = if (i < vPids.size) vPids[i] else "0"
-                val aPid = if (i < aPids.size) aPids[i] else "0"
-                val crypt = if (i < crypts.size) crypts[i] == "1" else false
-                val isHd = name.contains("HD", ignoreCase = true)
-
-                list.add(
-                    DvbChannel(idx++, name, satName, sid, satName, freq, pol, sym, "DVB-S2", "8PSK", "3/4", crypt, isHd, vPid, aPid)
-                )
-            }
-            return list // If we found XML channels, return them
-        }
-    } catch (_: Exception) {}
-
-    // Fallback to JSON if XML fails
-    try {
-        val objRegex = Regex("\\{[^{}]*\"(ServiceName|ProgramName|ChannelName|Name)\"[^{}]*\\}")
-        var idx = startOffset + 1
-        for (m in objRegex.findAll(data)) {
-            val obj = m.value
-            fun getJsonVal(vararg keys: String): String {
-                for (k in keys) {
-                    val v = Regex("\"$k\"\\s*:\\s*\"?([^\",}]+)\"?").find(obj)?.groupValues?.get(1)?.trim()
-                    if (!v.isNullOrEmpty()) return v
-                }
-                return ""
-            }
-            val name = getJsonVal("ServiceName", "ProgramName", "ChannelName", "Name")
+        for (i in names.indices) {
+            val name = names[i]
             if (name.isEmpty()) continue
-            
-            val sid = getJsonVal("ServiceID", "ProgramId", "ServiceIndex", "ProgramIndex").ifEmpty { "$idx" }
-            val satIdx = getJsonVal("SatIndex", "SatId")
-            val sat = getJsonVal("SatName").ifEmpty { satMap[satIdx] ?: "Satellite" }
-            val freq = getJsonVal("Frequency", "Freq", "TPFreq")
-            val pol = getJsonVal("Polarization", "Pol", "Polar")
-            val sym = getJsonVal("SymbolRate", "Sym", "SR")
-            val vPid = getJsonVal("VideoPID", "VPid").ifEmpty { "0" }
-            val aPid = getJsonVal("AudioPID", "APid").ifEmpty { "0" }
-            val crypt = getJsonVal("Scramble", "Crypt", "IsCrypt") == "1"
-            val isHd = getJsonVal("HD", "IsHD") == "1" || name.contains("HD", ignoreCase = true)
 
-            list.add(DvbChannel(idx++, name, sat, sid, sat, freq, pol, sym, "DVB-S2", "8PSK", "3/4", crypt, isHd, vPid, aPid))
+            val sid = if (i < ids.size) ids[i] else "$idx"
+            val satName = satMap["0"] ?: "Satellite" // Default fallback
+
+            // Since JSON in Raw is separate, we create a simple channel object
+            list.add(
+                DvbChannel(
+                    index = idx++,
+                    rawIdent = name,
+                    provider = satName,
+                    serviceId = sid,
+                    satName = satName,
+                    freq = "",
+                    pol = "",
+                    symRate = "",
+                    dvbSystem = "DVB-S2",
+                    modulation = "8PSK",
+                    fec = "3/4",
+                    isScrambled = false,
+                    isHd = name.contains("HD", ignoreCase = true),
+                    vPid = "0",
+                    aPid = "0"
+                )
+            )
         }
     } catch (_: Exception) {}
-    
     return list
     }
 
