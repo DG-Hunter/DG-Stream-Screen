@@ -1,13 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout  xmlns:android="http://schemas.android.com/apk/res/android">
-    
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:orientation="vertical"
-        android:background="#0B0F19"
-        android:padding="8dp">
-
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#0B0F19"
+    android:padding="8dp">
 
     <LinearLayout
         android:id="@+id/headerBar"
@@ -279,8 +276,6 @@
                 android:layout_width="68dp"
                 android:layout_height="wrap_content"
                 android:text="Quality (Q):"
-
-
                 android:textColor="#94A3B8"
                 android:textSize="11sp"/>
 
