@@ -309,23 +309,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyChannelFilters(query: String) {
-        val q = query.lowercase().trim()
-        filteredChannels.clear()
-        filteredChannels.addAll(
-            allChannels.filter { ch ->
-                val matchesSat = when (selectedSatFilter) {
-                    "ALL" -> true
-                    "FAV" -> ch.isFav
-                    else -> ch.satName.equals(selectedSatFilter, ignoreCase = true)
-                }
-                val matchesText = q.isEmpty() ||
-                        ch.rawIdent.lowercase().contains(q) ||
-                        ch.satName.lowercase().contains(q) ||
-                        ch.freq.contains(q)
-                matchesSat && matchesText
-            }
-        )
-        adapter.notifyDataSetChanged()
+    val q = query.lowercase().trim()
+    filteredChannels.clear()
+    filteredChannels.addAll(allChannels.filter { ch ->
+        val matchesSat = when (selectedSatFilter) {
+            "ALL" -> true
+            "FAV" -> ch.isFav
+            else -> ch.satName == selectedSatFilter
+        }
+        val matchesText = q.isEmpty() || ch.rawIdent.lowercase().contains(q) || ch.satName.lowercase().contains(q) || ch.freq.contains(q)
+        matchesSat && matchesText
+    })
+    adapter.notifyDataSetChanged()
     }
 
 private fun toggleFullscreen() {
@@ -660,23 +655,23 @@ private fun toggleFullscreen() {
     private fun parseGmScreenChannels(data: String, startOffset: Int, satMap: Map<String, String> = emptyMap()): List<DvbChannel> {
     val list = mutableListOf<DvbChannel>()
     var idx = startOffset + 1
-    
     try {
-        // Find all "ServiceName": "..." in the text, and try to get the ServiceID before it
         val nameRegex = Regex("\"ServiceName\"\\s*:\\s*\"([^\"]+)\"")
         val idRegex = Regex("\"ServiceID\"\\s*:\\s*\"?([0-9]+)\"?")
+        val satIdxRegex = Regex("\"SatIndex\"\\s*:\\s*\"?([0-9]+)\"?")
         
         val names = nameRegex.findAll(data).map { it.groupValues[1].trim() }.toList()
         val ids = idRegex.findAll(data).map { it.groupValues[1].trim() }.toList()
+        val satIdxs = satIdxRegex.findAll(data).map { it.groupValues[1].trim() }.toList()
 
         for (i in names.indices) {
             val name = names[i]
             if (name.isEmpty()) continue
-
+            
             val sid = if (i < ids.size) ids[i] else "$idx"
-            val satName = satMap["0"] ?: "Satellite" // Default fallback
+            val satIdx = if (i < satIdxs.size) satIdxs[i] else "0"
+            val satName = satMap[satIdx] ?: "Satellite $satIdx"
 
-            // Since JSON in Raw is separate, we create a simple channel object
             list.add(
                 DvbChannel(
                     index = idx++,
