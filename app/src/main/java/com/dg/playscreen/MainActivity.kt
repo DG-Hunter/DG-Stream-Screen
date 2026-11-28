@@ -476,79 +476,76 @@ private fun toggleFullscreen() {
     }
 
     private fun readGmScreenResponse(inStream: InputStream): String {
-        val allBytes = java.io.ByteArrayOutputStream()
-        val buf = ByteArray(16384)
-        var expectedPayloadSize = -1
-        var headerEndOffset = -1
-        var idleAttempts = 0
+    val allBytes = java.io.ByteArrayOutputStream()
+    val buf = ByteArray(16384)
+    var expectedPayloadSize = -1
+    var headerEndOffset = -1
+    var idleAttempts = 0
+    var lastReadTime = System.currentTimeMillis()
 
-        while (idleAttempts < 40) {
-            try {
-                if (inStream.available() > 0) {
-                    val r = inStream.read(buf)
-                    if (r <= 0) break
-                    allBytes.write(buf, 0, r)
-                    idleAttempts = 0
+    while (idleAttempts < 20) {
+        try {
+            if (inStream.available() > 0) {
+                val r = inStream.read(buf)
+                if (r <= 0) break
+                allBytes.write(buf, 0, r)
+                idleAttempts = 0
+                lastReadTime = System.currentTimeMillis()
 
-                    val currentData = allBytes.toByteArray()
-                    if (expectedPayloadSize == -1) {
-                        val strCheck = String(currentData, 0, minOf(currentData.size, 128), Charsets.ISO_8859_1)
-                        val match = Regex("Start(\\d{7})End").find(strCheck)
-                        if (match != null) {
-                            expectedPayloadSize = match.groupValues[1].toIntOrNull() ?: -1
-                            headerEndOffset = match.range.last + 1
-                        }
+                val currentData = allBytes.toByteArray()
+                if (expectedPayloadSize == -1) {
+                    val strCheck = String(currentData, 0, minOf(currentData.size, 128), Charsets.ISO_8859_1)
+                    val match = Regex("Start(\\d{7})End").find(strCheck)
+                    if (match != null) {
+                        expectedPayloadSize = match.groupValues[1].toIntOrNull() ?: -1
+                        headerEndOffset = match.range.last + 1
                     }
-
-                    if (expectedPayloadSize > 0 && headerEndOffset > 0) {
-                        if (currentData.size >= headerEndOffset + expectedPayloadSize) {
-                            break
-                        }
-                    }
-                } else {
-                    if (expectedPayloadSize == -1 && allBytes.size() > 32) {
-                        val strCheck = String(allBytes.toByteArray(), Charsets.ISO_8859_1)
-                        if (!strCheck.contains("Start")) break
-                    }
-                    Thread.sleep(100)
-                    idleAttempts++
                 }
-            } catch (_: Exception) {
-                break
+
+                if (expectedPayloadSize > 0 && headerEndOffset > 0 && currentData.size >= headerEndOffset + expectedPayloadSize) {
+                    break
+                }
+            } else {
+                if (System.currentTimeMillis() - lastReadTime > 1500) break
+                Thread.sleep(50)
+                idleAttempts++
             }
+        } catch (_: Exception) {
+            break
         }
+    }
 
-        val raw = allBytes.toByteArray()
-        if (raw.isEmpty()) return ""
+    val raw = allBytes.toByteArray()
+    if (raw.isEmpty()) return ""
 
-        val searchStart = if (headerEndOffset > 0) headerEndOffset else 0
+    val searchStart = if (headerEndOffset > 0) headerEndOffset else 0
 
-        for (i in searchStart until raw.size - 1) {
-            if (raw[i] == 0x78.toByte() && (
-                        raw[i + 1] == 0x9C.toByte() ||
-                        raw[i + 1] == 0xDA.toByte() ||
-                        raw[i + 1] == 0x01.toByte() ||
-                        raw[i + 1] == 0x5E.toByte()
-                        )) {
-                try {
-                    val inflater = java.util.zip.Inflater()
-                    inflater.setInput(raw, i, raw.size - i)
-                    val out = java.io.ByteArrayOutputStream()
-                    val tmp = ByteArray(8192)
-                    while (!inflater.finished()) {
-                        val count = inflater.inflate(tmp)
-                        if (count == 0) {
-                            if (inflater.needsInput()) break
-                        }
-                        out.write(tmp, 0, count)
+    for (i in searchStart until raw.size - 1) {
+        if (raw[i] == 0x78.toByte() && (
+                    raw[i + 1] == 0x9C.toByte() ||
+                    raw[i + 1] == 0xDA.toByte() ||
+                    raw[i + 1] == 0x01.toByte() ||
+                    raw[i + 1] == 0x5E.toByte()
+                    )) {
+            try {
+                val inflater = java.util.zip.Inflater()
+                inflater.setInput(raw, i, raw.size - i)
+                val out = java.io.ByteArrayOutputStream()
+                val tmp = ByteArray(8192)
+                while (!inflater.finished()) {
+                    val count = inflater.inflate(tmp)
+                    if (count == 0) {
+                        if (inflater.needsInput()) break
                     }
-                    inflater.end()
-                    val unzipped = out.toString("UTF-8")
-                    if (unzipped.isNotEmpty()) return unzipped
-                } catch (_: Exception) {}
-            }
+                    out.write(tmp, 0, count)
+                }
+                inflater.end()
+                val unzipped = out.toString("UTF-8")
+                if (unzipped.isNotEmpty()) return unzipped
+            } catch (_: Exception) {}
         }
-        return if (searchStart < raw.size) String(raw, searchStart, raw.size - searchStart, Charsets.UTF_8) else String(raw, Charsets.UTF_8)
+    }
+    return if (searchStart < raw.size) String(raw, searchStart, raw.size - searchStart, Charsets.UTF_8) else String(raw, Charsets.UTF_8)
     }
 
     private fun connectAndFetchChannels(rawIp: String) {
