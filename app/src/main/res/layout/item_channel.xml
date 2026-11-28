@@ -52,7 +52,7 @@
                 android:textSize="11sp"
                 android:layout_marginRight="6dp"/>
 
-            <TextView
+                        <TextView
                 android:id="@+id/tvChMeta"
                 android:layout_width="0dp"
                 android:layout_weight="1"
