@@ -328,6 +328,22 @@ class MainActivity : AppCompatActivity() {
         adapter.notifyDataSetChanged()
     }
 
+private fun toggleFullscreen() {
+    isFullscreen = !isFullscreen
+    val header = findViewById<LinearLayout>(R.id.headerBar)
+    val connect = findViewById<LinearLayout>(R.id.connectBar)
+    val tabs = findViewById<LinearLayout>(R.id.tabBar)
+    val params = playerContainer.layoutParams as LinearLayout.LayoutParams
+    if (isFullscreen) {
+        header.visibility = View.GONE; connect.visibility = View.GONE; tvStatus.visibility = View.GONE; tabs.visibility = View.GONE
+        params.height = 0; params.weight = 1f
+    } else {
+        header.visibility = View.VISIBLE; connect.visibility = View.VISIBLE; tvStatus.visibility = View.VISIBLE; tabs.visibility = View.VISIBLE
+        params.height = (195 * resources.displayMetrics.density).toInt(); params.weight = 0f
+    }
+    playerContainer.layoutParams = params
+}
+
     private fun initLibVlcPlayer() {
         try {
             val vlcView = VLCVideoLayout(this)
