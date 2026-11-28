@@ -328,22 +328,6 @@ class MainActivity : AppCompatActivity() {
         adapter.notifyDataSetChanged()
     }
 
-    private fun bindKey(buttonId: Int, keyCode: Int) {
-        findViewById<Button>(buttonId).setOnClickListener {
-            vibrateClick()
-            scope.launch { sendRawXml("<Command request=\"1040\"><key>$keyCode</key></Command>") }
-        }
-    }
-
-    private fun vibrateClick() {
-        try {
-            val v = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                v.vibrate(VibrationEffect.createOneShot(25, VibrationEffect.DEFAULT_AMPLITUDE))
-            } else { @Suppress("DEPRECATION") v.vibrate(25) }
-        } catch (_: Throwable) {}
-    }
-
     private fun initLibVlcPlayer() {
         try {
             val vlcView = VLCVideoLayout(this)
